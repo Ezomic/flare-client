@@ -1,0 +1,55 @@
+{
+    "name": "thijssensoftware/flare-client",
+    "description": "Reports exceptions, failed jobs and failed scheduled tasks to flare.",
+    "type": "library",
+    "license": "proprietary",
+    "version": "0.1.0",
+    "require": {
+        "php": "^8.3",
+        "illuminate/support": "^11.0|^12.0|^13.0",
+        "illuminate/http": "^11.0|^12.0|^13.0",
+        "illuminate/console": "^11.0|^12.0|^13.0",
+        "illuminate/queue": "^11.0|^12.0|^13.0",
+        "thijssensoftware/request-id": "^0.1.0"
+    },
+    "require-dev": {
+        "orchestra/testbench": "^9.0|^10.0|^11.0",
+        "pestphp/pest": "^3.0|^4.0",
+        "laravel/pint": "^1.0"
+    },
+    "repositories": [
+        {
+            "name": "request-id",
+            "type": "vcs",
+            "url": "https://github.com/Ezomic/request-id.git"
+        }
+    ],
+    "autoload": {
+        "psr-4": {
+            "Thijssensoftware\\FlareClient\\": "src/"
+        }
+    },
+    "autoload-dev": {
+        "psr-4": {
+            "Thijssensoftware\\FlareClient\\Tests\\": "tests/"
+        }
+    },
+    "extra": {
+        "laravel": {
+            "providers": [
+                "Thijssensoftware\\FlareClient\\FlareClientServiceProvider"
+            ]
+        }
+    },
+    "scripts": {
+        "test": "pest",
+        "lint": "pint"
+    },
+    "config": {
+        "allow-plugins": {
+            "pestphp/pest-plugin": true
+        }
+    },
+    "minimum-stability": "stable",
+    "prefer-stable": true
+}
