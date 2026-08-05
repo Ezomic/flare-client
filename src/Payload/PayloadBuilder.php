@@ -20,7 +20,10 @@ class PayloadBuilder
 
     private bool $releaseResolved = false;
 
-    public function __construct(private readonly Sanitiser $sanitiser) {}
+    public function __construct(
+        private readonly Sanitiser $sanitiser,
+        private readonly SizeGuard $guard,
+    ) {}
 
     /**
      * @param  array<string, mixed>  $origin
@@ -28,7 +31,7 @@ class PayloadBuilder
      */
     public function build(Throwable $e, Source $source, array $origin = []): array
     {
-        return array_filter([
+        return $this->guard->fit(array_filter([
             'event_id' => (string) Str::uuid(),
             'occurred_at' => now()->toIso8601String(),
             'kind' => 'php',
@@ -44,13 +47,13 @@ class PayloadBuilder
             'user' => $this->user(),
             'context' => $this->context(),
             'origin' => $origin === [] ? null : $this->sanitiser->scrubArray($origin),
-        ], fn (mixed $value): bool => $value !== null);
+        ], fn (mixed $value): bool => $value !== null));
     }
 
     /**
      * @return array<string, mixed>
      */
-    private function exception(Throwable $e): array
+    private function exception(Throwable $e, bool $thrown = true): array
     {
         return [
             'class' => $e::class,
@@ -58,7 +61,7 @@ class PayloadBuilder
             'code' => $e->getCode(),
             'file' => $e->getFile(),
             'line' => $e->getLine(),
-            'frames' => $this->frames($e),
+            'frames' => $this->frames($e, $thrown),
         ];
     }
 
@@ -74,7 +77,7 @@ class PayloadBuilder
         $guard = 0;
 
         while ($current !== null && $guard < 10) {
-            $chain[] = $this->exception($current);
+            $chain[] = $this->exception($current, thrown: false);
             $current = $current->getPrevious();
             $guard++;
         }
@@ -85,9 +88,12 @@ class PayloadBuilder
     /**
      * @return array<int, array<string, mixed>>
      */
-    private function frames(Throwable $e): array
+    private function frames(Throwable $e, bool $thrown): array
     {
-        $limit = $this->intConfig('flare-client.frames.limit', 50);
+        $limit = $thrown
+            ? $this->intConfig('flare-client.frames.limit', 50)
+            : $this->intConfig('flare-client.frames.chain_limit', 15);
+
         $frames = [];
 
         foreach (array_slice($e->getTrace(), 0, $limit) as $frame) {
@@ -109,7 +115,10 @@ class PayloadBuilder
                 // Source context only for our own frames: it is what turns a
                 // stack trace into a readable one, and reading vendor files
                 // off disk for every frame is a lot of IO for no insight.
-                'context' => $inApp && $line !== null ? $this->sourceContext($file, $line) : null,
+                // Only for the exception that was actually thrown. Ten links
+                // of a chain each carrying eleven lines per in-app frame is
+                // how a payload reaches a size flare refuses outright.
+                'context' => $thrown && $inApp && $line !== null ? $this->sourceContext($file, $line) : null,
             ], fn (mixed $value): bool => $value !== null);
         }
 
