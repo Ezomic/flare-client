@@ -128,10 +128,14 @@ class PayloadBuilder
     {
         $radius = $this->intConfig('flare-client.frames.context_lines', 5);
 
-        if ($radius < 1 || ! is_file($file) || ! is_readable($file)) {
+        if ($radius < 1) {
             return null;
         }
 
+        // Suppressed and checked rather than guarded with is_file(): a frame
+        // can point at something that is not a readable file at all, such as
+        // eval'd code, and the read failing says so more directly than three
+        // predicates guessing at it.
         $contents = @file($file, FILE_IGNORE_NEW_LINES);
 
         if ($contents === false) {
@@ -175,13 +179,9 @@ class PayloadBuilder
             return null;
         }
 
-        if (! Runtime::isHttpRequest()) {
-            return null;
-        }
+        $request = Runtime::httpRequest();
 
-        $request = App::get('request');
-
-        if (! $request instanceof Request) {
+        if ($request === null) {
             return null;
         }
 
@@ -263,10 +263,8 @@ class PayloadBuilder
             return null;
         }
 
-        if (! App::has('auth')) {
-            return null;
-        }
-
+        // No check for whether auth is bound: an app without it throws here,
+        // which is the same outcome by a shorter route.
         try {
             $user = auth()->user();
         } catch (Throwable) {

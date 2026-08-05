@@ -59,11 +59,9 @@ class FlareClientServiceProvider extends ServiceProvider
     private function registerExceptionReporting(): void
     {
         $this->app->booted(function (): void {
-            try {
-                $handler = $this->app->get(ExceptionHandler::class);
-            } catch (Throwable) {
-                return;
-            }
+            $handler = $this->app->bound(ExceptionHandler::class)
+                ? $this->app->get(ExceptionHandler::class)
+                : null;
 
             if (! $handler instanceof FoundationHandler) {
                 return;
