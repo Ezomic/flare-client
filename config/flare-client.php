@@ -122,8 +122,27 @@ return [
 
     'frames' => [
         'limit' => (int) env('FLARE_FRAME_LIMIT', 50),
+
+        // Every link of a wrapped chain carries its own stack, so the chain is
+        // held to a fraction of the thrown exception's and never carries
+        // source context. Enough is kept for flare to fingerprint the root
+        // cause, which is what it groups on.
+        'chain_limit' => (int) env('FLARE_CHAIN_FRAME_LIMIT', 15),
         'context_lines' => (int) env('FLARE_CONTEXT_LINES', 5),
     ],
+
+    /*
+    |--------------------------------------------------------------------------
+    | Payload size
+    |--------------------------------------------------------------------------
+    |
+    | flare refuses anything larger with a 413, and a 413 is dropped rather
+    | than spooled because replaying it cannot help. Detail is given up before
+    | that happens, in the order a human misses it least.
+    |
+    */
+
+    'max_payload_bytes' => (int) env('FLARE_MAX_PAYLOAD_BYTES', 262144),
 
     /*
     |--------------------------------------------------------------------------
