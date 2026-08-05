@@ -40,8 +40,13 @@ return [
     |
     | 'log' is off by default because it can flood: a single misbehaving loop
     | writing Log::error() would fill both the spool and flare's retention.
+    | When it is switched on, log_level is the floor: records below it are not
+    | built, let alone sent. flare has its own switch per project on top of
+    | this one, so a project can refuse log events without a redeploy here.
     |
     */
+
+    'log_level' => env('FLARE_LOG_LEVEL', 'error'),
 
     'sources' => [
         'http' => (bool) env('FLARE_SOURCE_HTTP', true),
