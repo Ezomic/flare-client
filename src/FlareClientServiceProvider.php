@@ -59,11 +59,7 @@ class FlareClientServiceProvider extends ServiceProvider
     private function registerExceptionReporting(): void
     {
         $this->app->booted(function (): void {
-            try {
-                $handler = $this->app->make(ExceptionHandler::class);
-            } catch (Throwable) {
-                return;
-            }
+            $handler = $this->app->bound(ExceptionHandler::class) ? $this->app->get(ExceptionHandler::class) : null;
 
             if (! $handler instanceof FoundationHandler) {
                 return;
@@ -135,7 +131,7 @@ class FlareClientServiceProvider extends ServiceProvider
     private function registerConsoleFailures(): void
     {
         Event::listen(function (CommandFinished $event): void {
-            if ($event->exitCode === 0 || $event->command === null) {
+            if ($event->exitCode === 0) {
                 return;
             }
 

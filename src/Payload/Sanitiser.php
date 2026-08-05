@@ -32,7 +32,10 @@ class Sanitiser
     ];
 
     /**
-     * @param  array<string, mixed>  $input
+     * Keys are normalised to strings on the way out, so anything array-shaped
+     * can come in: request input, a decoded body, a log record's context.
+     *
+     * @param  array<array-key, mixed>  $input
      * @return array<string, mixed>
      */
     public function scrubArray(array $input, int $depth = 0): array
@@ -95,7 +98,7 @@ class Sanitiser
     }
 
     /**
-     * @param  array<string, mixed>  $headers
+     * @param  array<array-key, mixed>  $headers
      * @return array<string, mixed>
      */
     public function scrubHeaders(array $headers): array
@@ -131,7 +134,6 @@ class Sanitiser
 
         parse_str($parts['query'], $query);
 
-        /** @var array<string, mixed> $query */
         $scrubbed = $this->scrubArray($query);
 
         $rebuilt = ($parts['scheme'] ?? 'http').'://'

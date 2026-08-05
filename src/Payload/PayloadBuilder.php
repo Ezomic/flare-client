@@ -97,10 +97,6 @@ class PayloadBuilder
         $frames = [];
 
         foreach (array_slice($e->getTrace(), 0, $limit) as $frame) {
-            if (! is_array($frame)) {
-                continue;
-            }
-
             $file = is_string($frame['file'] ?? null) ? $frame['file'] : '';
             $line = is_int($frame['line'] ?? null) ? $frame['line'] : null;
             $inApp = $this->isInApp($file);
@@ -108,7 +104,7 @@ class PayloadBuilder
             $frames[] = array_filter([
                 'file' => $file,
                 'line' => $line,
-                'function' => is_string($frame['function'] ?? null) ? $frame['function'] : null,
+                'function' => $frame['function'],
                 'class' => is_string($frame['class'] ?? null) ? $frame['class'] : null,
                 'type' => is_string($frame['type'] ?? null) ? $frame['type'] : null,
                 'in_app' => $inApp,
@@ -132,10 +128,14 @@ class PayloadBuilder
     {
         $radius = $this->intConfig('flare-client.frames.context_lines', 5);
 
-        if ($radius < 1 || ! is_file($file) || ! is_readable($file)) {
+        if ($radius < 1) {
             return null;
         }
 
+        // Suppressed and checked rather than guarded with is_file(): a frame
+        // can point at something that is not a readable file at all, such as
+        // eval'd code, and the read failing says so more directly than three
+        // predicates guessing at it.
         $contents = @file($file, FILE_IGNORE_NEW_LINES);
 
         if ($contents === false) {
@@ -179,13 +179,9 @@ class PayloadBuilder
             return null;
         }
 
-        if (! Runtime::isHttpRequest()) {
-            return null;
-        }
+        $request = Runtime::httpRequest();
 
-        $request = App::get('request');
-
-        if (! $request instanceof Request) {
+        if ($request === null) {
             return null;
         }
 
@@ -217,7 +213,7 @@ class PayloadBuilder
         $params = [];
 
         foreach ($route->parameters() as $key => $value) {
-            $params[$key] = is_object($value) ? '[model]' : $value;
+            $params[(string) $key] = is_object($value) ? '[model]' : $value;
         }
 
         return $params;
@@ -267,10 +263,8 @@ class PayloadBuilder
             return null;
         }
 
-        if (! App::has('auth')) {
-            return null;
-        }
-
+        // No check for whether auth is bound: an app without it throws here,
+        // which is the same outcome by a shorter route.
         try {
             $user = auth()->user();
         } catch (Throwable) {

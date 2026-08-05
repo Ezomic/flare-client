@@ -2,10 +2,13 @@
 
 declare(strict_types=1);
 
-use Illuminate\Http\Client\ConnectionException;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use Thijssensoftware\FlareClient\Enums\Source;
 use Thijssensoftware\FlareClient\LoggedMessage;
+use Thijssensoftware\FlareClient\Payload\PayloadBuilder;
+use Thijssensoftware\FlareClient\Payload\Sanitiser;
+use Thijssensoftware\FlareClient\Payload\SizeGuard;
 use Thijssensoftware\FlareClient\Support\Severity;
 
 beforeEach(function (): void {
@@ -88,17 +91,30 @@ it('does not report its own failure to report', function (): void {
     // The reporter writes a debug line when delivery fails. With the log
     // source on and the threshold at debug, that line is itself reportable,
     // which is a loop unless the re-entrancy guard covers this path.
-    $attempts = 0;
+    $builds = 0;
 
-    Http::fake(function () use (&$attempts) {
-        $attempts++;
+    $this->app->bind(PayloadBuilder::class, function () use (&$builds): PayloadBuilder {
+        return new class($builds, app(Sanitiser::class), app(SizeGuard::class)) extends PayloadBuilder
+        {
+            public function __construct(private int &$builds, Sanitiser $sanitiser, SizeGuard $guard)
+            {
+                parent::__construct($sanitiser, $guard);
+            }
 
-        throw new ConnectionException('flare is down');
+            public function build(Throwable $e, Source $source, array $origin = [], string $level = 'error'): array
+            {
+                $this->builds++;
+
+                throw new RuntimeException('cannot build a payload');
+            }
+        };
     });
 
     Log::error('something broke');
 
-    expect($attempts)->toBe(1);
+    // Two would mean the debug line the reporter writes about its own failure
+    // came back round as an event, and three would mean it never stopped.
+    expect($builds)->toBe(1);
 });
 
 it('refuses a level it does not recognise rather than reporting it', function (): void {

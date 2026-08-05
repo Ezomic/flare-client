@@ -24,13 +24,26 @@ final class Runtime
 {
     public static function isHttpRequest(): bool
     {
+        return self::httpRequest() instanceof Request;
+    }
+
+    /**
+     * The request being served, or null when there is not one.
+     *
+     * Returned rather than merely reported so a caller that needs the request
+     * does not have to make the same checks again and handle a "cannot happen"
+     * branch that only exists because the answer was thrown away.
+     */
+    public static function httpRequest(): ?Request
+    {
         if (! App::has('request')) {
-            return false;
+            return null;
         }
 
         $request = App::get('request');
 
-        return $request instanceof Request
-            && $request->server->has('REQUEST_METHOD');
+        return $request instanceof Request && $request->server->has('REQUEST_METHOD')
+            ? $request
+            : null;
     }
 }

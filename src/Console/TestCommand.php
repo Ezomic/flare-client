@@ -24,13 +24,13 @@ class TestCommand extends Command
 
     public function handle(Reporter $reporter): int
     {
-        $this->line('Reporting to: '.(string) config('flare-client.url'));
+        $this->line('Reporting to: '.$this->stringConfig('flare-client.url'));
         $this->line('Key present:  '.(is_string(config('flare-client.key')) && config('flare-client.key') !== '' ? 'yes' : 'no'));
         $this->line('Enabled:      '.(config('flare-client.enabled') === true ? 'yes' : 'no'));
         $this->newLine();
 
         $delivery = $reporter->report(
-            new RuntimeException('flare:test from '.(string) config('app.name')),
+            new RuntimeException('flare:test from '.$this->stringConfig('app.name')),
             Source::Console,
             ['command' => 'flare:test'],
         );
@@ -42,6 +42,13 @@ class TestCommand extends Command
             Delivery::Throttled => $this->failed('flare is rate limiting this app.'),
             Delivery::Skipped => $this->failed('Nothing was sent. Check FLARE_ENABLED, FLARE_KEY and the console source toggle.'),
         };
+    }
+
+    private function stringConfig(string $key): string
+    {
+        $value = config($key);
+
+        return is_string($value) ? $value : '';
     }
 
     private function succeeded(string $message): int

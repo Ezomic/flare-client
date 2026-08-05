@@ -118,7 +118,7 @@ class Reporter
     {
         try {
             Log::debug('flare-client failed to report an exception', [
-                'exception' => $e::class,
+                'exception_class' => $e::class,
                 'message' => $e->getMessage(),
             ]);
         } catch (Throwable) {
