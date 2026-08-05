@@ -10,6 +10,7 @@ use Illuminate\Console\Events\ScheduledTaskFailed;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Contracts\Debug\ExceptionHandler;
 use Illuminate\Foundation\Exceptions\Handler as FoundationHandler;
+use Illuminate\Log\Events\MessageLogged;
 use Illuminate\Queue\Events\JobFailed;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
@@ -18,6 +19,7 @@ use Thijssensoftware\FlareClient\Console\FlushCommand;
 use Thijssensoftware\FlareClient\Console\TestCommand;
 use Thijssensoftware\FlareClient\Enums\Source;
 use Thijssensoftware\FlareClient\Support\Runtime;
+use Thijssensoftware\FlareClient\Support\Severity;
 use Throwable;
 
 class FlareClientServiceProvider extends ServiceProvider
@@ -43,6 +45,7 @@ class FlareClientServiceProvider extends ServiceProvider
         $this->registerJobFailures();
         $this->registerScheduleFailures();
         $this->registerConsoleFailures();
+        $this->registerLogReporting();
         $this->scheduleFlush();
     }
 
@@ -149,6 +152,60 @@ class FlareClientServiceProvider extends ServiceProvider
                 ['command' => $event->command, 'exit_code' => $event->exitCode],
             );
         });
+    }
+
+    /**
+     * The log channel, which until now was configuration that did nothing:
+     * the source toggle, the enum case and flare's own capture_logs column all
+     * existed with nothing listening.
+     *
+     * A Log::error() with no exception behind it is invisible to the whole
+     * estate otherwise, and it is the shape half of the interesting failures
+     * take: a payment webhook that answered 200 with a body nobody expected,
+     * a nightly import that skipped a file.
+     */
+    private function registerLogReporting(): void
+    {
+        Event::listen(function (MessageLogged $event): void {
+            // Checked here rather than left to the reporter: every log line in
+            // the app passes through this listener, and an app with the source
+            // switched off should not pay for building a throwable per line.
+            if (config('flare-client.sources.log', false) !== true) {
+                return;
+            }
+
+            if (! Severity::reaches($event->level, $this->logLevel())) {
+                return;
+            }
+
+            // A record carrying an exception is one the handler has already
+            // reported, or is about to. Reporting it here as well would double
+            // count it and hide the real stack behind the log call's.
+            if (isset($event->context['exception'])) {
+                return;
+            }
+
+            $this->reporter()->report(
+                new LoggedMessage($event->message),
+                Source::Log,
+                ['channel' => $this->channel(), 'context' => $event->context],
+                $event->level,
+            );
+        });
+    }
+
+    private function logLevel(): string
+    {
+        $level = config('flare-client.log_level', 'error');
+
+        return is_string($level) && $level !== '' ? $level : 'error';
+    }
+
+    private function channel(): string
+    {
+        $channel = config('logging.default', 'stack');
+
+        return is_string($channel) ? $channel : 'stack';
     }
 
     private function scheduleFlush(): void

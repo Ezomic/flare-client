@@ -29,14 +29,14 @@ class PayloadBuilder
      * @param  array<string, mixed>  $origin
      * @return array<string, mixed>
      */
-    public function build(Throwable $e, Source $source, array $origin = []): array
+    public function build(Throwable $e, Source $source, array $origin = [], string $level = 'error'): array
     {
         return $this->guard->fit(array_filter([
             'event_id' => (string) Str::uuid(),
             'occurred_at' => now()->toIso8601String(),
             'kind' => 'php',
             'source' => $source->value,
-            'level' => 'error',
+            'level' => $level,
             'environment' => $this->environment(),
             'release_sha' => $this->release(),
             'request_id' => $this->requestId(),

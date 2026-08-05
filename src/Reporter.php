@@ -31,8 +31,12 @@ class Reporter
     /**
      * @param  array<string, mixed>  $origin
      */
-    public function report(Throwable $e, Source $source = Source::Http, array $origin = []): Delivery
-    {
+    public function report(
+        Throwable $e,
+        Source $source = Source::Http,
+        array $origin = [],
+        string $level = 'error',
+    ): Delivery {
         // Re-entrancy guard. Without it, a reporter that throws while building
         // a payload would be reported, throw again, and recurse until the
         // process died: an error tracker taking down the app it watches.
@@ -47,7 +51,7 @@ class Reporter
                 return Delivery::Skipped;
             }
 
-            return $this->transport->send($this->payloads->build($e, $source, $origin));
+            return $this->transport->send($this->payloads->build($e, $source, $origin, $level));
         } catch (Throwable $failure) {
             $this->swallow($failure);
 
