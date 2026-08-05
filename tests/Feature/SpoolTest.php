@@ -157,3 +157,53 @@ it('mutes on a batch 429 rather than hammering flare', function (): void {
     expect(app(Transport::class)->sendBatch([['event_id' => 'one']]))->toBe(Delivery::Throttled)
         ->and(app(CircuitBreaker::class)->isOpen())->toBeTrue();
 });
+
+it('appends concurrently without losing lines', function (): void {
+    // The failure this replaces: read the file, add a line, write it back.
+    // Two workers doing that at once keep only one of the two events, and
+    // during an outage every worker in the app is spooling at once.
+    $spool = app(Spool::class);
+    $path = Storage::disk('local')->path('flare-spool');
+
+    @mkdir($path, 0755, true);
+
+    $children = [];
+
+    foreach (range(1, 8) as $i) {
+        $pid = pcntl_fork();
+
+        if ($pid === 0) {
+            $spool->push(['event_id' => 'event-'.$i, 'padding' => str_repeat('x', 200)]);
+
+            exit(0);
+        }
+
+        $children[] = $pid;
+    }
+
+    foreach ($children as $pid) {
+        pcntl_waitpid($pid, $status);
+    }
+
+    $lines = 0;
+
+    foreach ($spool->files() as $file) {
+        $lines += count($spool->read($file));
+    }
+
+    expect($lines)->toBe(8);
+})->skip(! function_exists('pcntl_fork'), 'pcntl is not available');
+
+it('reports a failed write rather than throwing', function (): void {
+    $spool = app(Spool::class);
+    $directory = Storage::disk('local')->path('flare-spool');
+
+    @mkdir($directory, 0755, true);
+    chmod($directory, 0555);
+
+    $result = $spool->push(['event_id' => 'one']);
+
+    chmod($directory, 0755);
+
+    expect($result)->toBeFalse();
+})->skip(posix_getuid() === 0, 'root ignores the permission bits');

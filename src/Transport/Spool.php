@@ -38,20 +38,40 @@ class Spool
         try {
             $this->enforceTotalCap();
 
-            $path = $this->currentFile(strlen($line) + 1);
-
-            $storage = Storage::disk($this->disk);
-
-            $existing = $storage->exists($path) ? $storage->get($path) : '';
-
-            $storage->put($path, $existing.$line."\n");
-
-            return true;
+            return $this->append($this->currentFile(strlen($line) + 1), $line);
         } catch (Throwable) {
             // A spool that cannot be written must not become an exception in
             // the host app. Losing the event is the lesser failure.
             return false;
         }
+    }
+
+    /**
+     * Appends one line under an exclusive lock.
+     *
+     * Storage offers no locking append, and the read-modify-write it forces
+     * instead is wrong twice over. It costs a full read and a full write of a
+     * file that may be at the 5 MB cap, inline in a request that has already
+     * failed. And it is not atomic: during an outage every worker in the app
+     * is spooling at once, and two overlapping writes lose one of the two
+     * lines, which are precisely the events describing the outage.
+     */
+    private function append(string $path, string $line): bool
+    {
+        $storage = Storage::disk($this->disk);
+
+        // Only when missing: creating a directory that is already there resets
+        // its permissions, which quietly undoes an operator having locked it.
+        if (! $storage->directoryExists($this->directory())) {
+            $storage->makeDirectory($this->directory());
+        }
+
+        // Suppressed rather than caught: an unwritable spool is a condition to
+        // degrade through, not to report, and the caller already treats false
+        // as "the event is gone".
+        $written = @file_put_contents($storage->path($path), $line."\n", FILE_APPEND | LOCK_EX);
+
+        return $written !== false;
     }
 
     /**
@@ -150,11 +170,7 @@ class Spool
         $total = 0;
 
         foreach ($this->files() as $file) {
-            try {
-                $total += Storage::disk($this->disk)->size($file);
-            } catch (Throwable) {
-                continue;
-            }
+            $total += $this->size($file);
         }
 
         return $total;
@@ -162,7 +178,6 @@ class Spool
 
     private function currentFile(int $incoming): string
     {
-        $storage = Storage::disk($this->disk);
         $base = $this->directory().'/'.date('Y-m-d');
         $max = $this->intConfig('flare-client.spool.max_file_bytes', 5 * 1024 * 1024);
 
@@ -171,9 +186,7 @@ class Spool
         while (true) {
             $path = $index === 0 ? $base.'.jsonl' : $base.'-'.$index.'.jsonl';
 
-            $size = $storage->exists($path) ? $storage->size($path) : 0;
-
-            if ($size + $incoming <= $max) {
+            if ($this->size($path) + $incoming <= $max) {
                 return $path;
             }
 
@@ -185,15 +198,34 @@ class Spool
         }
     }
 
+    /**
+     * Drops the oldest files until the total is back under the cap.
+     *
+     * The running total is carried rather than recomputed: measuring it per
+     * iteration meant listing the directory and stat-ing every file again for
+     * each file dropped, on the hot path of a failing request.
+     */
     private function enforceTotalCap(): void
     {
         $max = $this->intConfig('flare-client.spool.max_total_bytes', 20 * 1024 * 1024);
 
         $files = $this->files();
+        $total = $this->totalBytes();
 
-        while ($this->totalBytes() > $max && $files !== []) {
-            $this->forget(array_shift($files));
+        while ($total > $max && $files !== []) {
+            $oldest = array_shift($files);
+
+            $total -= $this->size($oldest);
+
+            $this->forget($oldest);
         }
+    }
+
+    private function size(string $path): int
+    {
+        $storage = Storage::disk($this->disk);
+
+        return $storage->exists($path) ? $storage->size($path) : 0;
     }
 
     private function directory(): string
