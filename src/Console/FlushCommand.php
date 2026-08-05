@@ -5,7 +5,6 @@ declare(strict_types=1);
 namespace Thijssensoftware\FlareClient\Console;
 
 use Illuminate\Console\Command;
-use Thijssensoftware\FlareClient\Transport\Delivery;
 use Thijssensoftware\FlareClient\Transport\Spool;
 use Thijssensoftware\FlareClient\Transport\Transport;
 
@@ -46,15 +45,17 @@ class FlushCommand extends Command
 
             $remaining = $this->drain($transport, $events, $sent);
 
-            if ($remaining === $events) {
-                // Nothing moved: flare is still unreachable or shedding, so
-                // stop rather than walking the rest of the spool for nothing.
-                $this->warn('flare is unreachable, leaving the spool in place.');
+            $spool->rewrite($file, $remaining);
+
+            if ($remaining !== []) {
+                // flare stopped taking events part way through: unreachable,
+                // busy, or deliberately shedding. Walking the rest of the spool
+                // would only add load to something already struggling, and the
+                // next run picks up exactly where this one stopped.
+                $this->warn(sprintf('flare stopped accepting events, %d left spooled.', count($remaining)));
 
                 return self::SUCCESS;
             }
-
-            $spool->rewrite($file, $remaining);
         }
 
         $this->info(sprintf('Flushed %d event(s).', $sent));
@@ -71,11 +72,17 @@ class FlushCommand extends Command
         $size = $this->batchSize();
 
         foreach (array_chunk($events, $size) as $index => $chunk) {
-            if ($transport->sendBatch($chunk) !== Delivery::Sent) {
-                return array_values(array_slice($events, $index * $size));
-            }
+            $result = $transport->sendBatch($chunk);
 
-            $sent += count($chunk);
+            $sent += $result->accepted;
+
+            // Partial acceptance is the normal answer when flare is at its
+            // ceiling. Treating it as full delivery, which is what a bare
+            // "sent" verdict did, silently threw away everything past the
+            // event flare stopped at.
+            if ($result->accepted < count($chunk)) {
+                return array_values(array_slice($events, $index * $size + $result->accepted));
+            }
         }
 
         return [];

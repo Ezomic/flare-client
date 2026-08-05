@@ -53,14 +53,14 @@ class Transport
     /**
      * @param  array<int, array<string, mixed>>  $events
      */
-    public function sendBatch(array $events): Delivery
+    public function sendBatch(array $events): BatchResult
     {
         if ($events === []) {
-            return Delivery::Sent;
+            return new BatchResult(Delivery::Sent, 0);
         }
 
         if ($this->circuit->isOpen()) {
-            return Delivery::Spooled;
+            return new BatchResult(Delivery::Spooled, 0);
         }
 
         try {
@@ -68,24 +68,39 @@ class Transport
         } catch (Throwable) {
             $this->circuit->recordFailure();
 
-            return Delivery::Spooled;
+            return new BatchResult(Delivery::Spooled, 0);
         }
 
         if ($response->status() === 429) {
             $this->circuit->muteFor($this->retryAfter($response));
 
-            return Delivery::Throttled;
+            return new BatchResult(Delivery::Throttled, 0);
         }
 
         if ($response->successful()) {
             $this->circuit->recordSuccess();
 
-            return Delivery::Sent;
+            return new BatchResult(Delivery::Sent, $this->accepted($response, count($events)));
         }
 
         $this->circuit->recordFailure();
 
-        return Delivery::Spooled;
+        return new BatchResult(Delivery::Spooled, 0);
+    }
+
+    /**
+     * How many events flare says it took.
+     *
+     * A 202 with no count is the whole batch: the status is the answer and the
+     * count is flare volunteering that it took fewer. Anything unusable is read
+     * the same way, since inventing a smaller number would mean replaying
+     * events that have already landed.
+     */
+    private function accepted(Response $response, int $sent): int
+    {
+        $accepted = $response->json('accepted');
+
+        return is_int($accepted) && $accepted >= 0 ? min($accepted, $sent) : $sent;
     }
 
     /**

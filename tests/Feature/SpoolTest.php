@@ -138,7 +138,7 @@ it('does not attempt a batch while the circuit is open', function (): void {
 
     Http::fake();
 
-    expect(app(Transport::class)->sendBatch([['event_id' => 'one']]))->toBe(Delivery::Spooled);
+    expect(app(Transport::class)->sendBatch([['event_id' => 'one']])->delivery)->toBe(Delivery::Spooled);
 
     Http::assertNothingSent();
 });
@@ -146,7 +146,7 @@ it('does not attempt a batch while the circuit is open', function (): void {
 it('treats an empty batch as already delivered', function (): void {
     Http::fake();
 
-    expect(app(Transport::class)->sendBatch([]))->toBe(Delivery::Sent);
+    expect(app(Transport::class)->sendBatch([])->delivery)->toBe(Delivery::Sent);
 
     Http::assertNothingSent();
 });
@@ -154,7 +154,7 @@ it('treats an empty batch as already delivered', function (): void {
 it('mutes on a batch 429 rather than hammering flare', function (): void {
     Http::fake(['*' => Http::response([], 429, ['Retry-After' => '90'])]);
 
-    expect(app(Transport::class)->sendBatch([['event_id' => 'one']]))->toBe(Delivery::Throttled)
+    expect(app(Transport::class)->sendBatch([['event_id' => 'one']])->delivery)->toBe(Delivery::Throttled)
         ->and(app(CircuitBreaker::class)->isOpen())->toBeTrue();
 });
 
@@ -207,3 +207,92 @@ it('reports a failed write rather than throwing', function (): void {
 
     expect($result)->toBeFalse();
 })->skip(posix_getuid() === 0, 'root ignores the permission bits');
+
+it('keeps the events a partial batch did not take', function (): void {
+    $spool = app(Spool::class);
+
+    foreach (range(1, 5) as $i) {
+        $spool->push(['event_id' => 'event-'.$i]);
+    }
+
+    // flare stops at the first event past the project ceiling and reports the
+    // count. Reading a 202 as full delivery threw the other four away.
+    Http::fake(['*' => Http::response(['accepted' => 1], 202)]);
+
+    $this->artisan('flare:flush')->assertOk();
+
+    $files = $spool->files();
+
+    expect($files)->toHaveCount(1)
+        ->and($spool->read($files[0]))->toBe([
+            ['event_id' => 'event-2'],
+            ['event_id' => 'event-3'],
+            ['event_id' => 'event-4'],
+            ['event_id' => 'event-5'],
+        ]);
+});
+
+it('sends exactly what was left over on the next run', function (): void {
+    $spool = app(Spool::class);
+
+    foreach (range(1, 3) as $i) {
+        $spool->push(['event_id' => 'event-'.$i]);
+    }
+
+    $accepted = 1;
+    $posted = [];
+
+    Http::fake(function ($request) use (&$posted, &$accepted) {
+        $posted[] = $request->data()['events'];
+
+        return Http::response(['accepted' => $accepted], 202);
+    });
+
+    $this->artisan('flare:flush')->assertOk();
+
+    $accepted = 2;
+
+    $this->artisan('flare:flush')->assertOk();
+
+    expect($posted[1])->toBe([['event_id' => 'event-2'], ['event_id' => 'event-3']])
+        ->and($spool->files())->toBeEmpty();
+});
+
+it('stops walking the spool once flare starts shedding', function (): void {
+    $spool = app(Spool::class);
+
+    Storage::disk('local')->put('flare-spool/2026-08-01.jsonl', json_encode(['event_id' => 'old'])."\n");
+    Storage::disk('local')->put('flare-spool/2026-08-02.jsonl', json_encode(['event_id' => 'newer'])."\n");
+
+    $requests = 0;
+
+    Http::fake(function () use (&$requests) {
+        $requests++;
+
+        return Http::response(['accepted' => 0], 202);
+    });
+
+    $this->artisan('flare:flush')->assertOk();
+
+    expect($requests)->toBe(1)
+        ->and($spool->files())->toHaveCount(2);
+});
+
+it('treats a 202 with no count as the whole batch', function (): void {
+    $spool = app(Spool::class);
+    $spool->push(['event_id' => 'one']);
+
+    // Inventing a smaller number would mean replaying events flare has
+    // already recorded.
+    Http::fake(['*' => Http::response([], 202)]);
+
+    $this->artisan('flare:flush')->assertOk();
+
+    expect($spool->files())->toBeEmpty();
+});
+
+it('never counts more than it sent even if flare says otherwise', function (): void {
+    Http::fake(['*' => Http::response(['accepted' => 99], 202)]);
+
+    expect(app(Transport::class)->sendBatch([['event_id' => 'one']])->accepted)->toBe(1);
+});
