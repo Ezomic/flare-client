@@ -29,6 +29,6 @@ final class Severity
         $weight = self::ORDER[mb_strtolower($level)] ?? 0;
         $minimum = self::ORDER[mb_strtolower($threshold)] ?? self::ORDER['error'];
 
-        return $weight >= $minimum && $weight > 0;
+        return $weight >= $minimum;
     }
 }

@@ -41,7 +41,7 @@ jobs:
         with:
           php-version: ${{ matrix.php }}
           tools: composer:v2
-          coverage: none
+          coverage: xdebug
 
       - name: Cache Composer packages
         uses: actions/cache@v6
@@ -58,8 +58,10 @@ jobs:
           COMPOSER_AUTH: '{"github-oauth":{"github.com":"${{ secrets.GITHUB_TOKEN }}"}}'
         run: composer update --prefer-dist --no-interaction --no-progress
 
-      - name: Check code style
-        run: vendor/bin/pint --test
+      - name: Run CI checks
+        run: composer ci:check
 
-      - name: Run tests
-        run: vendor/bin/pest
+      # The package runs inside every app in the estate, which makes it the
+      # worst place to have weaker checks than the apps it watches.
+      - name: Enforce 100% test coverage
+        run: composer test:coverage

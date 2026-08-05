@@ -81,13 +81,16 @@ class FlushCommand extends Command
             // "sent" verdict did, silently threw away everything past the
             // event flare stopped at.
             if ($result->accepted < count($chunk)) {
-                return array_values(array_slice($events, $index * $size + $result->accepted));
+                return array_slice($events, $index * $size + $result->accepted);
             }
         }
 
         return [];
     }
 
+    /**
+     * @return int<1, max>
+     */
     private function batchSize(): int
     {
         $value = config('flare-client.spool.batch_size', 50);

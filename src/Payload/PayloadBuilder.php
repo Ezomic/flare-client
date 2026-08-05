@@ -97,10 +97,6 @@ class PayloadBuilder
         $frames = [];
 
         foreach (array_slice($e->getTrace(), 0, $limit) as $frame) {
-            if (! is_array($frame)) {
-                continue;
-            }
-
             $file = is_string($frame['file'] ?? null) ? $frame['file'] : '';
             $line = is_int($frame['line'] ?? null) ? $frame['line'] : null;
             $inApp = $this->isInApp($file);
@@ -108,7 +104,7 @@ class PayloadBuilder
             $frames[] = array_filter([
                 'file' => $file,
                 'line' => $line,
-                'function' => is_string($frame['function'] ?? null) ? $frame['function'] : null,
+                'function' => $frame['function'],
                 'class' => is_string($frame['class'] ?? null) ? $frame['class'] : null,
                 'type' => is_string($frame['type'] ?? null) ? $frame['type'] : null,
                 'in_app' => $inApp,
@@ -217,7 +213,7 @@ class PayloadBuilder
         $params = [];
 
         foreach ($route->parameters() as $key => $value) {
-            $params[$key] = is_object($value) ? '[model]' : $value;
+            $params[(string) $key] = is_object($value) ? '[model]' : $value;
         }
 
         return $params;

@@ -15,7 +15,8 @@
     "require-dev": {
         "orchestra/testbench": "^9.0|^10.0|^11.0",
         "pestphp/pest": "^3.0|^4.0",
-        "laravel/pint": "^1.0"
+        "laravel/pint": "^1.0",
+        "larastan/larastan": "^3.9"
     },
     "repositories": [
         {
@@ -43,7 +44,15 @@
     },
     "scripts": {
         "test": "pest",
-        "lint": "pint"
+        "test:coverage": "pest --coverage --min=100",
+        "lint": "pint",
+        "lint:check": "pint --test",
+        "types:check": "phpstan analyse --memory-limit=512M",
+        "ci:check": [
+            "@lint:check",
+            "@types:check",
+            "@test"
+        ]
     },
     "config": {
         "allow-plugins": {

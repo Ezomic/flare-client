@@ -60,7 +60,7 @@ class FlareClientServiceProvider extends ServiceProvider
     {
         $this->app->booted(function (): void {
             try {
-                $handler = $this->app->make(ExceptionHandler::class);
+                $handler = $this->app->get(ExceptionHandler::class);
             } catch (Throwable) {
                 return;
             }
@@ -135,7 +135,7 @@ class FlareClientServiceProvider extends ServiceProvider
     private function registerConsoleFailures(): void
     {
         Event::listen(function (CommandFinished $event): void {
-            if ($event->exitCode === 0 || $event->command === null) {
+            if ($event->exitCode === 0) {
                 return;
             }
 

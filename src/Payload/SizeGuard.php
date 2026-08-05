@@ -23,9 +23,15 @@ use Illuminate\Support\Facades\Log;
 class SizeGuard
 {
     /**
-     * How many frames survive the first and second clamp.
+     * Enough frames to still read the trace.
      */
-    private const CLAMP_STEPS = [10, 3];
+    private const READABLE_FRAMES = 10;
+
+    /**
+     * The floor. flare fingerprints on the top in-app frames, so clamping
+     * below this would regroup the event rather than shrink it.
+     */
+    private const FINGERPRINT_FRAMES = 3;
 
     /**
      * @param  array<string, mixed>  $payload
@@ -39,31 +45,25 @@ class SizeGuard
             return $payload;
         }
 
-        foreach ($this->reductions() as $reduce) {
-            $payload = $reduce($payload);
-            $payload['truncated'] = true;
+        $payload = $this->stripContext($payload);
 
-            if ($this->size($payload) <= $max) {
-                break;
-            }
+        if ($this->size($payload) > $max) {
+            $payload = $this->dropInput($payload);
         }
+
+        if ($this->size($payload) > $max) {
+            $payload = $this->clampFrames($payload, self::READABLE_FRAMES);
+        }
+
+        if ($this->size($payload) > $max) {
+            $payload = $this->clampFrames($payload, self::FINGERPRINT_FRAMES);
+        }
+
+        $payload['truncated'] = true;
 
         Log::debug('flare-client trimmed an oversized payload', ['bytes' => $this->size($payload)]);
 
         return $payload;
-    }
-
-    /**
-     * @return array<int, callable(array<string, mixed>): array<string, mixed>>
-     */
-    private function reductions(): array
-    {
-        return [
-            fn (array $payload): array => $this->stripContext($payload),
-            fn (array $payload): array => $this->dropInput($payload),
-            fn (array $payload): array => $this->clampFrames($payload, self::CLAMP_STEPS[0]),
-            fn (array $payload): array => $this->clampFrames($payload, self::CLAMP_STEPS[1]),
-        ];
     }
 
     /**
@@ -92,7 +92,7 @@ class SizeGuard
             return $payload;
         }
 
-        $request = $payload['request'];
+        $request = $this->object($payload['request']);
 
         if (isset($request['input'])) {
             $request['input'] = ['[dropped]' => true];
@@ -136,7 +136,7 @@ class SizeGuard
             $frames = [];
 
             foreach ($exception['frames'] as $frame) {
-                $frames[] = is_array($frame) ? $callback($frame) : $frame;
+                $frames[] = $callback($this->object($frame));
             }
 
             $exception['frames'] = $frames;
@@ -155,7 +155,7 @@ class SizeGuard
     private function overExceptions(array $payload, callable $callback): array
     {
         if (is_array($payload['exception'] ?? null)) {
-            $payload['exception'] = $callback($payload['exception']);
+            $payload['exception'] = $callback($this->object($payload['exception']));
         }
 
         if (! is_array($payload['previous'] ?? null)) {
@@ -165,12 +165,32 @@ class SizeGuard
         $chain = [];
 
         foreach ($payload['previous'] as $exception) {
-            $chain[] = is_array($exception) ? $callback($exception) : $exception;
+            $chain[] = $callback($this->object($exception));
         }
 
         $payload['previous'] = $chain;
 
         return $payload;
+    }
+
+    /**
+     * Narrows a decoded value to the object shape the payload is built from.
+     *
+     * Every part of a payload is a JSON object, whose keys are strings by
+     * definition, but nothing in the type system says so once a value has been
+     * read back out of one.
+     *
+     * @return array<string, mixed>
+     */
+    private function object(mixed $value): array
+    {
+        $object = [];
+
+        foreach (is_array($value) ? $value : [] as $key => $item) {
+            $object[(string) $key] = $item;
+        }
+
+        return $object;
     }
 
     /**
