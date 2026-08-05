@@ -13,6 +13,7 @@ use Illuminate\Support\Facades\App;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Storage;
 use Thijssensoftware\FlareClient\Enums\Source;
@@ -70,9 +71,15 @@ it('gives up looking for a spool file that fits rather than looping forever', fu
 });
 
 it('skips blank lines in a spool file', function (): void {
-    Storage::disk('local')->put('flare-spool/2026-08-01.jsonl', "\n".json_encode(['event_id' => 'one'])."\n\n");
+    // A blank line between two events, which is what a half-written line
+    // followed by a rewrite leaves behind.
+    Storage::disk('local')->put(
+        'flare-spool/2026-08-01.jsonl',
+        json_encode(['event_id' => 'one'])."\n\n".json_encode(['event_id' => 'two'])."\n",
+    );
 
-    expect(app(Spool::class)->read('flare-spool/2026-08-01.jsonl'))->toBe([['event_id' => 'one']]);
+    expect(app(Spool::class)->read('flare-spool/2026-08-01.jsonl'))
+        ->toBe([['event_id' => 'one'], ['event_id' => 'two']]);
 });
 
 it('throws away a spool file with nothing usable left in it', function (): void {
@@ -273,6 +280,72 @@ it('attaches to the framework exception handler when the app uses it', function 
     $this->app->make(ExceptionHandler::class)->report(new RuntimeException('through the handler'));
 
     Http::assertSent(fn ($request): bool => $request->data()['exception']['message'] === 'through the handler');
+});
+
+it('attaches to nothing when the app has swapped the handler for its own', function (): void {
+    // Documented rather than worked around: guessing at a custom handler's
+    // shape is worse than being clear that it gets nothing.
+    $this->app->singleton(ExceptionHandler::class, fn () => new class implements ExceptionHandler
+    {
+        public function report(Throwable $e): void {}
+
+        public function shouldReport(Throwable $e): bool
+        {
+            return true;
+        }
+
+        public function render($request, Throwable $e): mixed
+        {
+            return null;
+        }
+
+        public function renderForConsole($output, Throwable $e): void {}
+    });
+
+    Http::fake();
+
+    (new FlareClientServiceProvider($this->app))->boot();
+
+    $this->app->make(ExceptionHandler::class)->report(new RuntimeException('unseen'));
+
+    Http::assertNothingSent();
+});
+
+it('captures no source context when the frame points at a file that is gone', function (): void {
+    // realpath, because a frame records the resolved file and the temp
+    // directory is a symlink on macOS.
+    $path = realpath(sys_get_temp_dir()).'/flare-frame-'.getmypid().'.php';
+
+    // Two nested calls, so the trace carries a frame whose file is this one
+    // rather than the line in the test that called into it.
+    file_put_contents($path, '<?php return fn (): Throwable => (fn (): Throwable => new RuntimeException("from a file that will not exist"))();');
+
+    $factory = require $path;
+    $exception = $factory();
+
+    unlink($path);
+
+    $payload = app(PayloadBuilder::class)->build($exception, Source::Console);
+
+    $frame = collect($payload['exception']['frames'])
+        ->first(fn (array $frame): bool => ($frame['file'] ?? '') === $path);
+
+    expect($frame)->not->toBeNull()
+        ->and($frame)->not->toHaveKey('context');
+});
+
+it('gives up quietly when even logging its own failure fails', function (): void {
+    Log::shouldReceive('debug')->andThrow(new RuntimeException('the log is broken too'));
+
+    $this->app->bind(PayloadBuilder::class, fn (): PayloadBuilder => new class(app(Sanitiser::class), app(SizeGuard::class)) extends PayloadBuilder
+    {
+        public function build(Throwable $e, Source $source, array $origin = [], string $level = 'error'): array
+        {
+            throw new RuntimeException('builder is broken');
+        }
+    });
+
+    expect(app(Reporter::class)->report(new RuntimeException('boom')))->toBe(Delivery::Skipped);
 });
 
 it('schedules nothing when spooling is switched off', function (): void {
