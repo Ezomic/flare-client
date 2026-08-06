@@ -32,6 +32,16 @@ class Transport
      */
     public function send(array $payload): Delivery
     {
+        // Spool-only delivery exists for one installation: flare reporting to
+        // itself. An inline post from flare is another ingest request, and an
+        // ingest request that fails would report by making another one. The
+        // re-entrancy guard is per process and cannot see across that hop.
+        // Through the spool, the report is a file write and the flush runs in
+        // its own process a minute later, where there is nothing to recurse.
+        if ($this->spoolOnly()) {
+            return $this->spool->push($payload) ? Delivery::Spooled : Delivery::Dropped;
+        }
+
         if ($this->circuit->isOpen()) {
             $this->spool->push($payload);
 
@@ -146,6 +156,15 @@ class Transport
             // Retries are the spool's job, not the request's: retrying inline
             // multiplies the latency this whole design exists to bound.
             ->post($this->url().$path, $body);
+    }
+
+    /**
+     * Only the inline path is affected. The flush is the delivery this mode
+     * defers to, so switching it off as well would mean nothing is ever sent.
+     */
+    public function spoolOnly(): bool
+    {
+        return config('flare-client.delivery', 'inline') === 'spool';
     }
 
     private function retryAfter(Response $response): int

@@ -22,6 +22,24 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Delivery
+    |--------------------------------------------------------------------------
+    |
+    | 'inline' posts the event during the request that produced it and falls
+    | back to the spool when that fails.
+    |
+    | 'spool' never posts inline and leaves everything to flare:flush. It
+    | exists for one installation, flare reporting to itself: an inline post
+    | from flare is another ingest request, and an ingest request that fails
+    | would report by making another one. An app that does not run its
+    | scheduler must not use this, because nothing else will deliver.
+    |
+    */
+
+    'delivery' => env('FLARE_DELIVERY', 'inline'),
+
+    /*
+    |--------------------------------------------------------------------------
     | Timeouts
     |--------------------------------------------------------------------------
     |

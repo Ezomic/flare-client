@@ -61,6 +61,20 @@ sends one deliberate exception and then tells you what happened to it:
 | Rate limiting | flare is shedding load from this app. Check the project's `rate_limit_per_minute`. |
 | Nothing was sent | Check `FLARE_ENABLED`, `FLARE_KEY` and the console source toggle. |
 
+## Delivery modes
+
+| `FLARE_DELIVERY` | What happens |
+|------------------|--------------|
+| `inline` (default) | The event is posted during the request that produced it, falling back to the spool when that fails. |
+| `spool` | Nothing is posted inline. The event is written to the spool and `flare:flush` sends it within the minute. |
+
+`spool` exists for one installation: flare reporting to itself. An inline post from flare is another
+ingest request, and an ingest request that fails would report by making another one, which the
+per-process re-entrancy guard cannot see across. Through the spool, a report is a file write and
+the flush runs in its own process, where there is nothing to recurse.
+
+**Do not use `spool` in an app that does not run its scheduler.** Nothing else delivers.
+
 ## Delivery depends on the scheduler
 
 An event that cannot be delivered inline is written to a local spool file, and `flare:flush`
