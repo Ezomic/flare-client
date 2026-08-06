@@ -10,6 +10,7 @@ use Illuminate\Support\Facades\App;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Thijssensoftware\FlareClient\Enums\Source;
+use Thijssensoftware\FlareClient\Reporter;
 use Thijssensoftware\FlareClient\Support\Runtime;
 use Thijssensoftware\RequestId\RequestIdContext;
 use Throwable;
@@ -40,7 +41,7 @@ class PayloadBuilder
             'environment' => $this->environment(),
             'release_sha' => $this->release(),
             'request_id' => $this->requestId(),
-            'sdk' => ['name' => 'flare-client', 'version' => '0.1.0'],
+            'sdk' => ['name' => 'flare-client', 'version' => Reporter::VERSION],
             'exception' => $this->exception($e),
             'previous' => $this->previous($e),
             'request' => $this->request($source),
