@@ -377,3 +377,49 @@ it('swallows its own failure to report instead of propagating it', function (): 
 
     expect(app(Reporter::class)->report(new RuntimeException('boom')))->toBe(Delivery::Skipped);
 });
+
+it('does not mistake the request Laravel invents for a command for a real one', function (): void {
+    // SetRequestForConsole builds this from config('app.url') on every console
+    // run, REQUEST_METHOD and all, which is why that header cannot be the test.
+    // Reported from production, where every command's exceptions arrived as
+    // http with a request block describing a request nobody made.
+    $this->app['request'] = Request::create('https://tracker.thijssensoftware.nl', 'GET', server: [
+        'REQUEST_METHOD' => 'GET',
+        'argv' => ['artisan', 'migrate'],
+        'argc' => 2,
+    ]);
+
+    expect(Runtime::isHttpRequest())->toBeFalse()
+        ->and(Runtime::httpRequest())->toBeNull();
+});
+
+it('reports an exception from a command as console, with no request block', function (): void {
+    $this->app['request'] = Request::create('https://tracker.thijssensoftware.nl', 'GET', server: [
+        'REQUEST_METHOD' => 'GET',
+        'argv' => ['artisan', 'queue:work'],
+    ]);
+
+    $this->app->singleton(ExceptionHandler::class, fn () => new FoundationHandler($this->app));
+
+    (new FlareClientServiceProvider($this->app))->boot();
+
+    Http::fake(['*' => Http::response([], 202)]);
+
+    $this->app->make(ExceptionHandler::class)->report(new RuntimeException('from a command'));
+
+    Http::assertSent(function ($request): bool {
+        $payload = $request->data();
+
+        // source is part of flare's fingerprint: the same exception failing in
+        // a controller and in a nightly command are two different bugs.
+        return $payload['source'] === 'console' && ! isset($payload['request']);
+    });
+});
+
+it('still treats a request a web server actually served as one', function (): void {
+    $this->app['request'] = Request::create('https://tracker.thijssensoftware.nl/invoices', 'GET', server: [
+        'REQUEST_METHOD' => 'GET',
+    ]);
+
+    expect(Runtime::isHttpRequest())->toBeTrue();
+});
