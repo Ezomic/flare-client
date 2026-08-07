@@ -10,15 +10,16 @@ use Illuminate\Support\Facades\App;
 /**
  * Answers "are we serving an HTTP request right now".
  *
- * Deliberately not App::runningInConsole(), which only asks what the SAPI is.
- * Laravel binds a Request even inside a queue worker or an artisan command,
- * where it is synthesised from the CLI and describes nothing; and under
- * PHPUnit the SAPI is always cli even while a request is being simulated, so
- * runningInConsole() would mean no request is ever captured in a test and the
- * scrubbing would go unverified.
+ * Deliberately not App::runningInConsole(), which only asks what the SAPI is:
+ * under PHPUnit that is always cli even while a request is being simulated, so
+ * it would mean no request is ever captured in a test and the scrubbing would
+ * go unverified.
  *
- * REQUEST_METHOD is the discriminator: the web server sets it, and a request
- * synthesised from argv does not have it.
+ * argv is the discriminator. Laravel binds a Request even inside a queue worker
+ * or an artisan command, where SetRequestForConsole synthesises one from
+ * config('app.url') that carries a REQUEST_METHOD like any other, so that
+ * header alone cannot tell a real request from an invented one. A web server
+ * never passes argv, and a command always does.
  */
 final class Runtime
 {
@@ -42,8 +43,10 @@ final class Runtime
 
         $request = App::get('request');
 
-        return $request instanceof Request && $request->server->has('REQUEST_METHOD')
-            ? $request
-            : null;
+        if (! $request instanceof Request || $request->server->has('argv')) {
+            return null;
+        }
+
+        return $request->server->has('REQUEST_METHOD') ? $request : null;
     }
 }
