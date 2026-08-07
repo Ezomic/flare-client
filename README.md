@@ -68,10 +68,20 @@ sends one deliberate exception and then tells you what happened to it:
 | `inline` (default) | The event is posted during the request that produced it, falling back to the spool when that fails. |
 | `spool` | Nothing is posted inline. The event is written to the spool and `flare:flush` sends it within the minute. |
 
-`spool` exists for one installation: flare reporting to itself. An inline post from flare is another
-ingest request, and an ingest request that fails would report by making another one, which the
-per-process re-entrancy guard cannot see across. Through the spool, a report is a file write and
-the flush runs in its own process, where there is nothing to recurse.
+`spool` was built for flare reporting to itself: an inline post from flare is another ingest
+request, and an ingest request that fails would report by making another one, which the per-process
+re-entrancy guard cannot see across. Through the spool, a report is a file write and the flush runs
+in its own process, where there is nothing to recurse.
+
+It is also the better choice for **any app sharing a host with flare**, which on this estate is all
+of them. Measured on the production droplet, an inline report costs 0.7s to 1.3s: TLS handshake to
+the public hostname and back through nginx (~0.4s), then flare's own boot and write. Against the
+1.5s timeout that is a coin toss, and a lost toss costs the user the full 1.5s on the error page and
+still delivers a minute later through the spool. Deferring up front pays nothing inline, batches the
+delivery, and arrives just as fast.
+
+Prefer `inline` when flare is genuinely remote and reachable in tens of milliseconds, and when
+seeing an error the moment it happens matters more than the latency it costs.
 
 **Do not use `spool` in an app that does not run its scheduler.** Nothing else delivers.
 
