@@ -423,3 +423,13 @@ it('still treats a request a web server actually served as one', function (): vo
 
     expect(Runtime::isHttpRequest())->toBeTrue();
 });
+
+it('ignores a header deny list of the wrong shape', function (): void {
+    config()->set('flare-client.sanitise.headers', 'not an array');
+
+    // With a usable list this is redacted by name. With an unusable one the
+    // deny list is empty and only the value-shape rules still apply, which a
+    // plain string does not trip.
+    expect(app(Sanitiser::class)->scrubHeaders(['authorization' => 'plain']))
+        ->toBe(['authorization' => 'plain']);
+});
