@@ -10,6 +10,7 @@ use Illuminate\Support\Facades\App;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Thijssensoftware\FlareClient\Enums\Source;
+use Thijssensoftware\FlareClient\FatalError;
 use Thijssensoftware\FlareClient\Reporter;
 use Thijssensoftware\FlareClient\Support\Runtime;
 use Thijssensoftware\RequestId\RequestIdContext;
@@ -91,6 +92,10 @@ class PayloadBuilder
      */
     private function frames(Throwable $e, bool $thrown): array
     {
+        if ($e instanceof FatalError) {
+            return $this->fatalFrame($e);
+        }
+
         $limit = $thrown
             ? $this->intConfig('flare-client.frames.limit', 50)
             : $this->intConfig('flare-client.frames.chain_limit', 15);
@@ -120,6 +125,27 @@ class PayloadBuilder
         }
 
         return $frames;
+    }
+
+    /**
+     * A fatal has no stack to walk: PHP records where it stopped and nothing
+     * else. That location is all there is, and it is also what lets flare tell
+     * two exhausted-memory failures in different files apart, which the
+     * message alone cannot do.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    private function fatalFrame(FatalError $e): array
+    {
+        $file = $e->getFile();
+        $inApp = $this->isInApp($file);
+
+        return [array_filter([
+            'file' => $file,
+            'line' => $e->getLine(),
+            'in_app' => $inApp,
+            'context' => $inApp ? $this->sourceContext($file, $e->getLine()) : null,
+        ], fn (mixed $value): bool => $value !== null)];
     }
 
     /**

@@ -28,6 +28,8 @@ class Reporter
 
     private bool $reporting = false;
 
+    private bool $reported = false;
+
     public function __construct(
         private readonly PayloadBuilder $payloads,
         private readonly Transport $transport,
@@ -56,6 +58,8 @@ class Reporter
                 return Delivery::Skipped;
             }
 
+            $this->reported = true;
+
             return $this->transport->send($this->payloads->build($e, $source, $origin, $level));
         } catch (Throwable $failure) {
             $this->swallow($failure);
@@ -64,6 +68,18 @@ class Reporter
         } finally {
             $this->reporting = false;
         }
+    }
+
+    /**
+     * Whether anything has been handed to the transport in this process.
+     *
+     * The fatal handler needs this: an uncaught exception ends the process as
+     * a fatal as well, and reporting it a second time would file the same
+     * failure twice, the second time without its stack.
+     */
+    public function hasReported(): bool
+    {
+        return $this->reported;
     }
 
     public function shouldIgnore(Throwable $e): bool
