@@ -61,6 +61,28 @@ sends one deliberate exception and then tells you what happened to it:
 | Rate limiting | flare is shedding load from this app. Check the project's `rate_limit_per_minute`. |
 | Nothing was sent | Check `FLARE_ENABLED`, `FLARE_KEY` and the console source toggle. |
 
+## Check the install, not just the wiring
+
+```bash
+php artisan flare:doctor
+```
+
+`flare:test` proves one event can be delivered right now. That is not the same question as "will
+this app deliver anything", and the rollout produced two installs that passed the first and failed
+the second:
+
+* one had no `schedule:run` entry, so `flare:flush` never ran. Inline delivery still worked, which
+  is why nobody noticed the retry path was missing.
+* one was configured inline where the round trip to flare takes longer than the timeout it was
+  given, so half its reports failed and arrived a minute late through the spool instead.
+
+The doctor checks the key, the url, the enabled switch, how long a real round trip takes **against
+the configured timeout**, whether `flare:flush` is scheduled, whether the delivery mode agrees with
+that, and whether anything is already sitting in the spool getting old.
+
+It exits non-zero on anything that means events are being lost, so it can be the last step of a
+deploy rather than something somebody remembers to run.
+
 ## Delivery modes
 
 | `FLARE_DELIVERY` | What happens |
