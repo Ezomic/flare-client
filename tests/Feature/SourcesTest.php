@@ -31,6 +31,7 @@ it('reports a failed queue job with the job it was running', function (): void {
     $job->shouldReceive('resolveName')->andReturn('App\Jobs\SendInvoice');
     $job->shouldReceive('getQueue')->andReturn('default');
     $job->shouldReceive('attempts')->andReturn(3);
+    $job->shouldReceive('payload')->andReturn([]);
 
     event(new JobFailed('database', $job, new RuntimeException('Job blew up')));
 

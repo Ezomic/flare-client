@@ -100,7 +100,7 @@ every app has.
 | Source | What it catches | Default |
 |--------|-----------------|---------|
 | `http` | Exceptions reported through the framework exception handler during a request | on |
-| `job` | Failed queue jobs, with the job class, queue, connection and attempt count | on |
+| `job` | Failed queue jobs, with the job class, queue, connection, attempt count and what the job was working on | on |
 | `schedule` | Failed scheduled tasks, and background tasks that exit non-zero | on |
 | `console` | Commands that exit non-zero | on |
 | `log` | `Log::error()` and above with no exception behind them | off |
