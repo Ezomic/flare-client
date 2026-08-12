@@ -105,6 +105,9 @@ every app has.
 | `console` | Commands that exit non-zero | on |
 | `log` | `Log::error()` and above with no exception behind them | off |
 
+Fatal errors are captured separately, because they are not a source: they are what happens when
+there is no exception to have a source. See below.
+
 Each can be switched off with `FLARE_SOURCE_HTTP=false` and so on.
 
 The schedule source is the one worth having on everywhere: cron pipes `schedule:run` to
@@ -122,6 +125,26 @@ and reporting them twice would hide the real stack behind the log call's.
 
 flare has its own switch per project on top of this one, so log capture can be refused centrally
 without redeploying the app.
+
+### Fatal errors
+
+The exception handler sees everything that is thrown. It never sees the process being killed:
+memory exhausted, `max_execution_time` reached, a file that would not compile. PHP writes the error
+and stops, and there is nothing to catch.
+
+Those are captured from a shutdown function and switched off with `FLARE_CAPTURE_FATALS=false`.
+Three things are worth knowing:
+
+* **They always go through the spool**, whatever `FLARE_DELIVERY` says. A process that died because
+  it ran out of memory cannot open a socket; it can still append a line to a file.
+* **A small block of memory is reserved at boot** and released in the handler, so a report about
+  exhausted memory has room to be built.
+* **An uncaught exception ends the process as a fatal too.** When the handler has already reported
+  it, with a real stack, the fatal copy is dropped rather than filed a second time with nothing in
+  it.
+
+A fatal has no stack, so the frame flare receives is the file and line PHP recorded. That is what
+keeps two exhausted-memory failures in different files apart, which the message alone cannot do.
 
 ### Apps with a custom exception handler
 

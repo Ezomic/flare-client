@@ -9,6 +9,7 @@ use Illuminate\Console\Events\ScheduledBackgroundTaskFinished;
 use Illuminate\Console\Events\ScheduledTaskFailed;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Contracts\Debug\ExceptionHandler;
+use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Foundation\Exceptions\Handler as FoundationHandler;
 use Illuminate\Log\Events\MessageLogged;
 use Illuminate\Queue\Events\JobFailed;
@@ -18,6 +19,7 @@ use RuntimeException;
 use Thijssensoftware\FlareClient\Console\FlushCommand;
 use Thijssensoftware\FlareClient\Console\TestCommand;
 use Thijssensoftware\FlareClient\Enums\Source;
+use Thijssensoftware\FlareClient\Fatal\FatalReporter;
 use Thijssensoftware\FlareClient\Support\Runtime;
 use Thijssensoftware\FlareClient\Support\Severity;
 use Throwable;
@@ -29,6 +31,15 @@ class FlareClientServiceProvider extends ServiceProvider
         $this->mergeConfigFrom(__DIR__.'/../config/flare-client.php', 'flare-client');
 
         $this->app->singleton(Reporter::class);
+
+        // The reporter is passed as a closure rather than an instance: a fatal
+        // handler built at boot must not drag the whole reporting graph into
+        // existence with it, or an app rebinding any part of it afterwards
+        // would keep talking to the objects that existed before it did.
+        $this->app->singleton(
+            FatalReporter::class,
+            fn (Application $app): FatalReporter => new FatalReporter(fn (): Reporter => $app->make(Reporter::class)),
+        );
     }
 
     public function boot(): void
@@ -46,6 +57,7 @@ class FlareClientServiceProvider extends ServiceProvider
         $this->registerScheduleFailures();
         $this->registerConsoleFailures();
         $this->registerLogReporting();
+        $this->registerFatalErrors();
         $this->scheduleFlush();
     }
 
@@ -188,6 +200,25 @@ class FlareClientServiceProvider extends ServiceProvider
                 $event->level,
             );
         });
+    }
+
+    /**
+     * The failures that end the process instead of raising an exception.
+     *
+     * Registered last, so the memory it holds back is reserved after
+     * everything else has taken what it needs.
+     */
+    private function registerFatalErrors(): void
+    {
+        if (config('flare-client.fatals', true) !== true) {
+            return;
+        }
+
+        $fatals = $this->app->make(FatalReporter::class);
+
+        $fatals->reserveMemory();
+
+        register_shutdown_function($fatals->handleLast(...));
     }
 
     private function logLevel(): string

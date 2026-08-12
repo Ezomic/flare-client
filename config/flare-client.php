@@ -66,6 +66,21 @@ return [
 
     'log_level' => env('FLARE_LOG_LEVEL', 'error'),
 
+    /*
+    |--------------------------------------------------------------------------
+    | Fatal errors
+    |--------------------------------------------------------------------------
+    |
+    | Exhausted memory, an expired time limit, a file that would not compile.
+    | PHP does not throw these, it stops, so the exception handler never sees
+    | them and without this they are invisible. Captured from a shutdown
+    | function and always written to the spool: a dying process cannot make an
+    | HTTP request, but it can still append a line to a file.
+    |
+    */
+
+    'fatals' => (bool) env('FLARE_CAPTURE_FATALS', true),
+
     'sources' => [
         'http' => (bool) env('FLARE_SOURCE_HTTP', true),
         'job' => (bool) env('FLARE_SOURCE_JOB', true),
