@@ -156,11 +156,40 @@ it('fails when the spool has been sitting there, whatever the schedule claims', 
 it('treats an unreadable timestamp as no backlog rather than as a failure', function (): void {
     fakeHealth();
 
-    Storage::disk('local')->put('flare-spool/2026-08-01.jsonl', json_encode(['event_id' => 'one'])."\n");
+    // A spool that lists and reads but cannot be dated. Calling that old would
+    // fail an install over a stat that did not work.
+    app()->instance(Spool::class, new class extends Spool
+    {
+        public function files(): array
+        {
+            return ['flare-spool/2026-08-01.jsonl'];
+        }
 
-    Storage::shouldReceive('disk')->andThrow(new RuntimeException('the disk went away'));
+        public function read(string $path): array
+        {
+            return [['event_id' => 'one']];
+        }
 
-    expect(app(Doctor::class)->run())->toBeArray();
+        public function lastModified(string $path): int
+        {
+            throw new RuntimeException('no timestamp for you');
+        }
+    });
+
+    $spool = findings()['spool'];
+
+    expect($spool->status)->toBe(Status::Ok)
+        ->and($spool->detail)->toContain('1 event(s)');
+});
+
+it('reads an app with no scheduler at all as having no flush', function (): void {
+    fakeHealth();
+
+    // Not every app binds a Schedule. Asking one that does not has to answer
+    // the question rather than become a second failure.
+    app()->bind(Schedule::class, fn () => throw new RuntimeException('no scheduler here'));
+
+    expect(findings()['flush']->status)->toBe(Status::Warn);
 });
 
 it('exits non-zero when events are being lost', function (): void {
