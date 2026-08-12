@@ -20,6 +20,7 @@ use Thijssensoftware\FlareClient\Console\FlushCommand;
 use Thijssensoftware\FlareClient\Console\TestCommand;
 use Thijssensoftware\FlareClient\Enums\Source;
 use Thijssensoftware\FlareClient\Fatal\FatalReporter;
+use Thijssensoftware\FlareClient\Support\JobContext;
 use Thijssensoftware\FlareClient\Support\Runtime;
 use Thijssensoftware\FlareClient\Support\Severity;
 use Throwable;
@@ -83,6 +84,11 @@ class FlareClientServiceProvider extends ServiceProvider
         });
     }
 
+    /**
+     * A job failure without what the job was working on is a group you have to
+     * reproduce before you can read it. The queue payload knows, and it is
+     * already decoded by the time this runs.
+     */
     private function registerJobFailures(): void
     {
         Event::listen(function (JobFailed $event): void {
@@ -91,6 +97,7 @@ class FlareClientServiceProvider extends ServiceProvider
                 'queue' => $event->job->getQueue(),
                 'connection' => $event->connectionName,
                 'attempts' => $event->job->attempts(),
+                ...JobContext::from($event->job),
             ]);
         });
     }
