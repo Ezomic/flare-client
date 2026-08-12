@@ -16,6 +16,7 @@ use Illuminate\Queue\Events\JobFailed;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
 use RuntimeException;
+use Thijssensoftware\FlareClient\Console\DoctorCommand;
 use Thijssensoftware\FlareClient\Console\FlushCommand;
 use Thijssensoftware\FlareClient\Console\TestCommand;
 use Thijssensoftware\FlareClient\Enums\Source;
@@ -50,7 +51,7 @@ class FlareClientServiceProvider extends ServiceProvider
         ], 'flare-client-config');
 
         if ($this->app->runningInConsole()) {
-            $this->commands([FlushCommand::class, TestCommand::class]);
+            $this->commands([DoctorCommand::class, FlushCommand::class, TestCommand::class]);
         }
 
         $this->registerExceptionReporting();

@@ -165,6 +165,15 @@ class Spool
         }
     }
 
+    /**
+     * When the file was last written, which for the oldest file in the spool
+     * is how long the flush has been failing to drain it.
+     */
+    public function lastModified(string $path): int
+    {
+        return Storage::disk($this->disk)->lastModified($path);
+    }
+
     public function totalBytes(): int
     {
         $total = 0;
