@@ -159,8 +159,16 @@ Three things are worth knowing:
 
 * **They always go through the spool**, whatever `FLARE_DELIVERY` says. A process that died because
   it ran out of memory cannot open a socket; it can still append a line to a file.
-* **A small block of memory is reserved at boot** and released in the handler, so a report about
-  exhausted memory has room to be built.
+* **The payload is built by hand**, not through the usual builder. Measured on the production
+  droplet, a normal report costs 2.3 MB to assemble: resolving the reporting graph, scrubbing,
+  sizing. After memory exhaustion there is no 2.3 MB, so the handler died inside itself and the
+  failure it existed to report was the one it could not. Holding 2.3 MB back per worker for a rare
+  event is not a trade worth making either, so the fatal payload is assembled from values already
+  in memory instead.
+* **A small block of memory is reserved at boot** and released in the handler, which is what buys
+  room for that.
+* **No source context.** Reading the file around the failing line is an allocation, and there is
+  none to make. The file and line are reported; the lines around them are not.
 * **An uncaught exception ends the process as a fatal too.** When the handler has already reported
   it, with a real stack, the fatal copy is dropped rather than filed a second time with nothing in
   it.
