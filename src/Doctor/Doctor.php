@@ -90,6 +90,15 @@ class Doctor
             return Finding::fail('reachable', sprintf('flare answered %d', $response->status()));
         }
 
+        // Under spool delivery the timeout buys nothing a user waits for: the
+        // event is a file write, and the round trip happens later from cron,
+        // where a slow one costs nobody anything. Reporting the number is
+        // useful; warning about it would be crying wolf at an app that has
+        // already done the thing the warning would ask for.
+        if ($this->spoolOnly()) {
+            return Finding::ok('reachable', sprintf('%.2fs round trip, paid by the flush rather than a request', $elapsed));
+        }
+
         $detail = sprintf('%.2fs round trip against a %.2fs timeout', $elapsed, $timeout);
 
         // Half the budget is the line: below it a slow moment still fits,
@@ -106,6 +115,11 @@ class Doctor
         return rtrim(is_string($url) ? $url : '', '/');
     }
 
+    private function spoolOnly(): bool
+    {
+        return config('flare-client.delivery', 'inline') === 'spool';
+    }
+
     private function timeout(): float
     {
         $timeout = config('flare-client.timeout', 1.5);
@@ -118,7 +132,7 @@ class Doctor
      */
     private function delivery(): array
     {
-        $spoolOnly = config('flare-client.delivery', 'inline') === 'spool';
+        $spoolOnly = $this->spoolOnly();
         $scheduled = $this->flushIsScheduled();
 
         $mode = Finding::ok('delivery', $spoolOnly ? 'spool only' : 'inline');

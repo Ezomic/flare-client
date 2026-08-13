@@ -99,6 +99,22 @@ it('warns when the round trip leaves no room inside the timeout', function (): v
         ->and($reachable->detail)->toContain('too little room');
 });
 
+it('does not warn about a margin that spool delivery already pays for', function (): void {
+    fakeHealth();
+
+    // Same thin margin, but nobody is waiting on it: the event is a file
+    // write and the round trip happens later, from cron. Warning here would
+    // tell an app to do the thing it has already done.
+    config()->set('flare-client.timeout', 0.0001);
+    config()->set('flare-client.delivery', 'spool');
+
+    $reachable = findings()['reachable'];
+
+    expect($reachable->status)->toBe(Status::Ok)
+        ->and($reachable->detail)->toContain('paid by the flush')
+        ->and($reachable->detail)->not->toContain('Consider FLARE_DELIVERY=spool');
+});
+
 it('fails spool-only delivery with no scheduler, because nothing would ever send', function (): void {
     fakeHealth();
     withoutSchedule();

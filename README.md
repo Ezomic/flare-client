@@ -80,6 +80,10 @@ The doctor checks the key, the url, the enabled switch, how long a real round tr
 the configured timeout**, whether `flare:flush` is scheduled, whether the delivery mode agrees with
 that, and whether anything is already sitting in the spool getting old.
 
+The round trip is only held against the timeout under inline delivery. Under spool the number is
+reported and nothing is made of it: the event is a file write, and the round trip is paid later by
+the flush, in cron, where a slow one costs nobody anything.
+
 It exits non-zero on anything that means events are being lost, so it can be the last step of a
 deploy rather than something somebody remembers to run.
 
