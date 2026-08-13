@@ -56,7 +56,9 @@ it('reports where the process stopped, so two of these are two bugs', function (
         ->and($frames[0]['in_app'])->toBeTrue();
 });
 
-it('reads source context for a fatal in a file it can open', function (): void {
+it('reads no source context, because there is no memory to read a file with', function (): void {
+    // The one situation this runs in is "the process ran out of memory". A
+    // file read is an allocation, and file() pulls the whole thing in.
     $path = realpath(sys_get_temp_dir()).'/flare-fatal-'.getmypid().'.php';
     file_put_contents($path, "<?php\n// one\n// two\n// three\n");
 
@@ -66,12 +68,65 @@ it('reads source context for a fatal in a file it can open', function (): void {
 
     $frame = app(Spool::class)->read(app(Spool::class)->files()[0])[0]['exception']['frames'][0];
 
-    expect($frame['context']['lines'])->toContain('// three');
+    expect($frame)->not->toHaveKey('context')
+        ->and($frame['file'])->toBe($path);
+});
+
+it('builds its report without resolving the reporting graph', function (): void {
+    // Measured at 2.3 MB through PayloadBuilder on the production droplet,
+    // against a 256 KB reserve. After memory exhaustion there is no 2.3 MB,
+    // so the handler died inside itself and reported nothing.
+    app(FatalReporter::class)->handle(fatal());
+
+    expect(app()->resolved(Reporter::class))->toBeFalse()
+        ->and(app(Spool::class)->files())->toHaveCount(1);
+});
+
+it('sends a payload flare can group', function (): void {
+    app(FatalReporter::class)->handle(fatal());
+
+    $payload = app(Spool::class)->read(app(Spool::class)->files()[0])[0];
+
+    expect($payload['event_id'])->toMatch('/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/')
+        ->and($payload['kind'])->toBe('php')
+        ->and($payload['level'])->toBe('error')
+        ->and($payload['environment'])->toBeString()
+        ->and($payload['sdk']['name'])->toBe('flare-client')
+        ->and($payload['context']['memory_limit'])->toBeString();
+});
+
+it('mints a different id for every fatal', function (): void {
+    app(FatalReporter::class)->handle(fatal(['message' => 'one']));
+    app(FatalReporter::class)->handle(fatal(['message' => 'two']));
+
+    $ids = collect(app(Spool::class)->files())
+        ->flatMap(fn (string $file): array => app(Spool::class)->read($file))
+        ->map(fn (array $payload): mixed => $payload['event_id'])
+        ->unique();
+
+    expect($ids)->toHaveCount(2);
+});
+
+it('sends nothing when the app has no key', function (): void {
+    config()->set('flare-client.key', null);
+
+    app(FatalReporter::class)->handle(fatal());
+
+    expect(app(Spool::class)->files())->toBeEmpty();
+});
+
+it('sends nothing when the source it would be attributed to is off', function (): void {
+    config()->set('flare-client.sources.console', false);
+
+    app(FatalReporter::class)->handle(fatal());
+
+    expect(app(Spool::class)->files())->toBeEmpty();
 });
 
 it('goes through the spool whatever the delivery mode says', function (): void {
     // A dying process has no socket, no timeout budget and often no memory to
-    // make a request with. Appending to a file is what is still possible.
+    // make a request with. Appending to a file is what is still possible, so
+    // this path never asks the transport anything.
     config()->set('flare-client.delivery', 'inline');
 
     app(FatalReporter::class)->handle(fatal());
@@ -97,6 +152,9 @@ it('does nothing when the process ended cleanly', function (): void {
 it('leaves an uncaught exception to the handler that already reported it', function (): void {
     // An uncaught exception ends the process as a fatal too. The handler has
     // already filed it, with a real stack; this copy has none.
+    Http::fake(['*' => Http::response([], 202)]);
+    config()->set('flare-client.delivery', 'inline');
+
     app(Reporter::class)->report(new RuntimeException('the real one'));
 
     app(FatalReporter::class)->handle(fatal([
@@ -131,7 +189,7 @@ it('names each fatal type it can be handed', function (): void {
 });
 
 it('reserves memory once per process, however many times it is asked', function (): void {
-    $fatals = new FatalReporter(fn (): Reporter => app(Reporter::class));
+    $fatals = new FatalReporter(app(), app(Spool::class));
 
     // The reserve is process-wide, and boot already took it. Handing the
     // handler nothing releases it, which is the state a first boot starts in.
@@ -156,9 +214,15 @@ it('reads the last error when the shutdown function fires', function (): void {
 });
 
 it('says nothing when even reporting the fatal fails', function (): void {
-    $fatals = new FatalReporter(fn (): Reporter => throw new RuntimeException('the container is gone'));
+    $spool = new class extends Spool
+    {
+        public function push(array $payload): bool
+        {
+            throw new RuntimeException('the spool is gone too');
+        }
+    };
 
-    $fatals->handle(fatal());
+    (new FatalReporter(app(), $spool))->handle(fatal());
 })->throwsNoExceptions();
 
 it('resolves nothing at all when fatal capture is switched off', function (): void {
@@ -171,7 +235,7 @@ it('resolves nothing at all when fatal capture is switched off', function (): vo
     $this->app->singleton(FatalReporter::class, function () use (&$resolved): FatalReporter {
         $resolved = true;
 
-        return new FatalReporter(fn (): Reporter => app(Reporter::class));
+        return new FatalReporter(app(), app(Spool::class));
     });
 
     (new FlareClientServiceProvider($this->app))->boot();

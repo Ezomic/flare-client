@@ -24,6 +24,7 @@ use Thijssensoftware\FlareClient\Fatal\FatalReporter;
 use Thijssensoftware\FlareClient\Support\JobContext;
 use Thijssensoftware\FlareClient\Support\Runtime;
 use Thijssensoftware\FlareClient\Support\Severity;
+use Thijssensoftware\FlareClient\Transport\Spool;
 use Throwable;
 
 class FlareClientServiceProvider extends ServiceProvider
@@ -34,13 +35,13 @@ class FlareClientServiceProvider extends ServiceProvider
 
         $this->app->singleton(Reporter::class);
 
-        // The reporter is passed as a closure rather than an instance: a fatal
-        // handler built at boot must not drag the whole reporting graph into
-        // existence with it, or an app rebinding any part of it afterwards
-        // would keep talking to the objects that existed before it did.
+        // The fatal handler takes the container and the spool, and nothing
+        // else. Both are cheap to hold; the reporting graph behind them is not,
+        // and building it at boot would freeze it against later rebinding as
+        // well as cost every app that never has a fatal.
         $this->app->singleton(
             FatalReporter::class,
-            fn (Application $app): FatalReporter => new FatalReporter(fn (): Reporter => $app->make(Reporter::class)),
+            fn (Application $app): FatalReporter => new FatalReporter($app, $app->make(Spool::class)),
         );
     }
 
