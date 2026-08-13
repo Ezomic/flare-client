@@ -34,8 +34,13 @@ class FatalReporter
      * A handler that runs because memory ran out cannot allocate the payload
      * it needs to describe why. Releasing this at the top of the handler buys
      * back exactly enough room to build one.
+     *
+     * Static because the thing being reserved is the process's memory, not the
+     * object's. One process booting the framework many times, which is what a
+     * test suite is, would otherwise hold back another block per boot and
+     * eventually exhaust the very thing this exists to protect.
      */
-    private ?string $reserve = null;
+    private static ?string $reserve = null;
 
     /**
      * The reporter is resolved when a fatal actually happens, not when this is
@@ -49,13 +54,13 @@ class FatalReporter
 
     public function reserveMemory(int $bytes = 262144): void
     {
-        // Once only. A provider that boots twice would otherwise hold back
-        // twice the memory, which is the opposite of the point.
-        if ($this->reserve !== null) {
+        // Once per process. A provider that boots twice would otherwise hold
+        // back twice the memory, which is the opposite of the point.
+        if (self::$reserve !== null) {
             return;
         }
 
-        $this->reserve = str_repeat(' ', $bytes);
+        self::$reserve = str_repeat(' ', $bytes);
     }
 
     /**
@@ -72,7 +77,7 @@ class FatalReporter
      */
     public function handle(?array $error): void
     {
-        $this->reserve = null;
+        self::$reserve = null;
 
         if ($error === null || ($error['type'] & self::FATAL) === 0) {
             return;
