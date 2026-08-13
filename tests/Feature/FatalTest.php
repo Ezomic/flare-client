@@ -130,10 +130,12 @@ it('names each fatal type it can be handed', function (): void {
     expect($types)->toBe(['E_ERROR', 'E_PARSE', 'E_CORE_ERROR', 'E_COMPILE_ERROR', 'E_USER_ERROR']);
 });
 
-it('reserves memory once, however many times it is asked', function (): void {
-    // A fresh one: the container's singleton was primed during boot, which is
-    // exactly the second-call behaviour under test here.
+it('reserves memory once per process, however many times it is asked', function (): void {
     $fatals = new FatalReporter(fn (): Reporter => app(Reporter::class));
+
+    // The reserve is process-wide, and boot already took it. Handing the
+    // handler nothing releases it, which is the state a first boot starts in.
+    $fatals->handle(null);
 
     $before = memory_get_usage();
     $fatals->reserveMemory(100000);
