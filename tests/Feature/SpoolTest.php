@@ -2,6 +2,8 @@
 
 declare(strict_types=1);
 
+use Illuminate\Console\Scheduling\Event;
+use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Storage;
 use Thijssensoftware\FlareClient\Transport\CircuitBreaker;
@@ -295,4 +297,105 @@ it('never counts more than it sent even if flare says otherwise', function (): v
     Http::fake(['*' => Http::response(['accepted' => 99], 202)]);
 
     expect(app(Transport::class)->sendBatch([['event_id' => 'one']])->accepted)->toBe(1);
+});
+
+it('schedules the flush in the foreground, where a oneshot scheduler cannot kill it', function (): void {
+    // Most apps run schedule:run as a oneshot systemd unit, and systemd kills
+    // the unit's whole control group once schedule:run exits. A flush sent to
+    // the background went with it, so the spool never drained.
+    $flush = collect(app(Schedule::class)->events())
+        ->first(fn (Event $event): bool => str_contains((string) $event->command, 'flare:flush'));
+
+    expect($flush)->toBeInstanceOf(Event::class)
+        ->and($flush->runInBackground)->toBeFalse()
+        ->and($flush->withoutOverlapping)->toBeTrue()
+        ->and($flush->expiresAt)->toBe(5)
+        ->and($flush->expression)->toBe('* * * * *');
+});
+
+it('sends at most ten batches in one run and leaves the rest for the next', function (): void {
+    // In the foreground, every other task the app has that minute waits for
+    // the flush. A full spool after an outage is hundreds of batches.
+    config()->set('flare-client.spool.batch_size', 1);
+
+    $spool = app(Spool::class);
+
+    foreach (['2026-08-01', '2026-08-02', '2026-08-03'] as $day => $name) {
+        $lines = array_map(
+            fn (int $i): string => (string) json_encode(['event_id' => 'event-'.($day * 4 + $i)]),
+            range(1, 4),
+        );
+
+        Storage::disk('local')->put('flare-spool/'.$name.'.jsonl', implode("\n", $lines)."\n");
+    }
+
+    $posted = [];
+
+    Http::fake(function ($request) use (&$posted) {
+        $posted[] = $request->data()['events'];
+
+        return Http::response(['accepted' => 1], 202);
+    });
+
+    $this->artisan('flare:flush')->assertOk();
+
+    expect($posted)->toHaveCount(10)
+        ->and($spool->files())->toBe(['flare-spool/2026-08-03.jsonl'])
+        ->and($spool->read('flare-spool/2026-08-03.jsonl'))->toBe([
+            ['event_id' => 'event-11'],
+            ['event_id' => 'event-12'],
+        ]);
+
+    $this->artisan('flare:flush')->assertOk();
+
+    expect(array_slice($posted, 10))->toBe([[['event_id' => 'event-11']], [['event_id' => 'event-12']]])
+        ->and($spool->files())->toBeEmpty();
+});
+
+it('leaves a file the run has no batches left for exactly as it was', function (): void {
+    // Rewriting it anyway would reset its age, and the age of the oldest file
+    // is how the doctor tells a flush that is not running.
+    config()->set('flare-client.spool.batch_size', 1);
+
+    $spool = app(Spool::class);
+
+    Storage::disk('local')->put('flare-spool/2026-08-01.jsonl', json_encode(['event_id' => 'one'])."\n".json_encode(['event_id' => 'two'])."\n");
+    Storage::disk('local')->put('flare-spool/2026-08-02.jsonl', json_encode(['event_id' => 'three'])."\n");
+
+    $untouched = time() - 3600;
+    touch(Storage::disk('local')->path('flare-spool/2026-08-02.jsonl'), $untouched);
+
+    Http::fake(['*' => Http::response(['accepted' => 1], 202)]);
+
+    $this->artisan('flare:flush', ['--batches' => 2])->assertOk();
+
+    Http::assertSentCount(2);
+
+    expect($spool->files())->toBe(['flare-spool/2026-08-02.jsonl'])
+        ->and($spool->lastModified('flare-spool/2026-08-02.jsonl'))->toBe($untouched);
+});
+
+it('keeps the events past the batch cap when flare stops part way', function (): void {
+    config()->set('flare-client.spool.batch_size', 2);
+
+    $spool = app(Spool::class);
+
+    foreach (range(1, 5) as $i) {
+        $spool->push(['event_id' => 'event-'.$i]);
+    }
+
+    Http::fake(['*' => Http::response(['accepted' => 1], 202)]);
+
+    $this->artisan('flare:flush', ['--batches' => 2])
+        ->expectsOutputToContain('4 left spooled')
+        ->assertOk();
+
+    Http::assertSentCount(1);
+
+    expect($spool->read($spool->files()[0]))->toBe([
+        ['event_id' => 'event-2'],
+        ['event_id' => 'event-3'],
+        ['event_id' => 'event-4'],
+        ['event_id' => 'event-5'],
+    ]);
 });

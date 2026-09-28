@@ -116,6 +116,12 @@ seeing an error the moment it happens matters more than the latency it costs.
 An event that cannot be delivered inline is written to a local spool file, and `flare:flush`
 replays it. The command is registered automatically and runs every minute.
 
+It runs in the foreground of `schedule:run`, not in the background. Most apps run the scheduler as
+a oneshot systemd unit, and systemd kills everything in the unit once `schedule:run` exits, so a
+backgrounded flush died before it could send anything. In the foreground the app's other tasks that
+minute wait for it, which is why one run sends at most 10 batches (`--batches`) and leaves the rest
+of the spool for the next minute.
+
 **An app whose cron does not run `schedule:run` will spool and never drain.** Delivery is built on
 the scheduler rather than on a queued job precisely because six apps in the estate have no queue
 worker; `Mail::queue` and friends would silently never run there. The scheduler is the one thing
@@ -235,6 +241,7 @@ php artisan vendor:publish --tag=flare-client-config
 | `FLARE_MAX_PAYLOAD_BYTES` | 256 KB | Detail is given up until the payload fits: source context first, then request input, then frames. The payload is flagged `truncated`. Enough frames always survive for flare to group the event correctly. |
 | `FLARE_SPOOL_MAX_FILE` | 5 MB | A new spool file is started. |
 | `FLARE_SPOOL_MAX_TOTAL` | 20 MB | **The oldest spool file is deleted.** In a storm the newest events describe what is happening now, and a spool that filled the droplet would take down every app on it. |
+| `flare:flush --batches` | 10 | The run stops and the rest of the spool goes on the next one. The flush runs in the foreground of `schedule:run`, so this is what keeps a full spool from holding up the app's other scheduled tasks for minutes. |
 
 ## Correlation with snag
 

@@ -257,10 +257,13 @@ class FlareClientServiceProvider extends ServiceProvider
                 return;
             }
 
+            // In the foreground on purpose. Most apps run schedule:run as a
+            // oneshot systemd unit, and systemd kills the unit's whole control
+            // group once schedule:run exits, a backgrounded flush included.
+            // The flush caps its own run, so the wait it adds stays short.
             $schedule->command(FlushCommand::class)
                 ->everyMinute()
-                ->withoutOverlapping(5)
-                ->runInBackground();
+                ->withoutOverlapping(5);
         });
     }
 
