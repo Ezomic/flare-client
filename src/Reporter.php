@@ -24,7 +24,7 @@ class Reporter
     /**
      * Reported in every payload, so flare can tell which apps are behind.
      */
-    public const VERSION = '0.3.4';
+    public const VERSION = '0.3.5';
 
     private bool $reporting = false;
 
