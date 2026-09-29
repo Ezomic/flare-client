@@ -211,6 +211,41 @@ it by accident, because the defaults are merged in rather than replaced:
 ],
 ```
 
+## Deciding what belongs together
+
+flare groups on the exception class, the normalised message and the top in-app frames. When that
+is wrong for an exception the app owns, the exception can name its group itself:
+
+```php
+use Thijssensoftware\FlareClient\ProvidesFingerprint;
+
+final class IntegrationException extends RuntimeException implements ProvidesFingerprint
+{
+    public function __construct(public readonly string $integration, string $message)
+    {
+        parent::__construct($message);
+    }
+
+    public function flareFingerprint(): ?string
+    {
+        return 'integration:'.$this->integration;
+    }
+}
+```
+
+Every event with the same key lands in one group per project, kind and source, whatever its class,
+message or stack. That splits a generic wrapper by integration, and it keeps one bug in one group
+when a refactor moves its top frame.
+
+* **Null or blank leaves grouping to flare.** So does a key method that throws: a broken key costs
+  the event its custom group, never the event itself.
+* **The whole chain is searched, outermost first.** The framework wraps some exceptions itself (a
+  `ViewException` around anything thrown in a Blade view), and a wrapper the app did not write must
+  not hide the key.
+* **The key is scrubbed like any other value**, and flare reads at most 255 characters of it.
+* **Changing a key starts a new group.** The old group keeps its history; nothing is re-pointed.
+* A flare older than this feature ignores the key and groups as it always did.
+
 ## What is scrubbed
 
 Three redundant layers, because the cost of a miss is a live credential sitting in a database
