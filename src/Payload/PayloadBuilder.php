@@ -10,6 +10,7 @@ use Illuminate\Support\Facades\App;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
 use Thijssensoftware\FlareClient\Enums\Source;
+use Thijssensoftware\FlareClient\ProvidesFingerprint;
 use Thijssensoftware\FlareClient\Reporter;
 use Thijssensoftware\FlareClient\Support\Runtime;
 use Thijssensoftware\RequestId\RequestIdContext;
@@ -42,6 +43,7 @@ class PayloadBuilder
             'release_sha' => $this->release(),
             'request_id' => $this->requestId(),
             'sdk' => ['name' => 'flare-client', 'version' => Reporter::VERSION],
+            'fingerprint' => $this->fingerprint($e),
             'exception' => $this->exception($e),
             'previous' => $this->previous($e),
             'request' => $this->request($source),
@@ -49,6 +51,43 @@ class PayloadBuilder
             'context' => $this->context(),
             'origin' => $origin === [] ? null : $this->sanitiser->scrubArray($origin),
         ], fn (mixed $value): bool => $value !== null));
+    }
+
+    /**
+     * The app's own grouping key, from the outermost link of the chain that
+     * offers one. The whole chain is searched because the framework wraps
+     * exceptions the app never sees, such as anything thrown in a view.
+     */
+    private function fingerprint(Throwable $e): ?string
+    {
+        $current = $e;
+        $guard = 0;
+
+        while ($current !== null && $guard <= 10) {
+            $key = $current instanceof ProvidesFingerprint ? $this->keyOf($current) : '';
+
+            if ($key !== '') {
+                return $this->sanitiser->scrubString($key);
+            }
+
+            $current = $current->getPrevious();
+            $guard++;
+        }
+
+        return null;
+    }
+
+    /**
+     * App code, so it can throw. A broken key costs the event its custom
+     * group, never the event itself.
+     */
+    private function keyOf(ProvidesFingerprint $e): string
+    {
+        try {
+            return trim((string) $e->flareFingerprint());
+        } catch (Throwable) {
+            return '';
+        }
     }
 
     /**
