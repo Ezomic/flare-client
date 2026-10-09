@@ -5,6 +5,7 @@ declare(strict_types=1);
 namespace Thijssensoftware\FlareClient\Console;
 
 use Illuminate\Console\Command;
+use Thijssensoftware\FlareClient\Heartbeat\Heartbeats;
 use Thijssensoftware\FlareClient\Transport\Spool;
 use Thijssensoftware\FlareClient\Transport\Transport;
 
@@ -28,8 +29,12 @@ class FlushCommand extends Command
 
     protected $description = 'Send spooled flare events that could not be delivered inline';
 
-    public function handle(Spool $spool, Transport $transport): int
+    public function handle(Spool $spool, Transport $transport, Heartbeats $heartbeats): int
     {
+        // Independent of the event spool, so it runs first: a quiet error spool
+        // is the normal case, and heartbeats must still go out then.
+        $heartbeats->flush();
+
         $files = $spool->files();
 
         if ($files === []) {

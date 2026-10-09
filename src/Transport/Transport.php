@@ -99,6 +99,53 @@ class Transport
     }
 
     /**
+     * Delivers heartbeat pings and, when the schedule changed, what the app
+     * expects to run.
+     *
+     * Returns whether the beats are finished with: true for delivered and for
+     * refused-for-good (413, 422), false when they should stay spooled and be
+     * tried again. Heartbeats never go inline, only from the flush, so a slow
+     * flare costs a scheduled run a second and not a user a page.
+     *
+     * @param  array<int, array<string, mixed>>  $beats
+     * @param  array<int, array<string, mixed>>  $schedule
+     */
+    public function sendHeartbeats(array $beats, array $schedule): bool
+    {
+        if ($this->circuit->isOpen()) {
+            return false;
+        }
+
+        try {
+            $response = $this->post('/api/heartbeat', ['beats' => $beats, 'schedule' => $schedule]);
+        } catch (Throwable) {
+            $this->circuit->recordFailure();
+
+            return false;
+        }
+
+        if ($response->status() === 429) {
+            $this->circuit->muteFor($this->retryAfter($response));
+
+            return false;
+        }
+
+        if ($response->successful()) {
+            $this->circuit->recordSuccess();
+
+            return true;
+        }
+
+        if (in_array($response->status(), [413, 422], true)) {
+            return true;
+        }
+
+        $this->circuit->recordFailure();
+
+        return false;
+    }
+
+    /**
      * How many events flare says it took.
      *
      * A 202 with no count is the whole batch: the status is the answer and the

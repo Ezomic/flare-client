@@ -91,6 +91,26 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Heartbeats
+    |--------------------------------------------------------------------------
+    |
+    | A scheduled task that stops running never throws, so flare watches for
+    | the absence of its ping. Pings are appended to a spool of their own when
+    | a task finishes and sent in one batch by flare:flush, never inline. The
+    | schedule itself (task and cron expression) is reported whenever it
+    | changes, so flare learns what to expect without a second place to
+    | configure it.
+    |
+    */
+
+    'heartbeats' => [
+        'enabled' => (bool) env('FLARE_HEARTBEATS', true),
+        'path' => env('FLARE_HEARTBEAT_PATH', 'flare-heartbeats'),
+        'batch_size' => (int) env('FLARE_HEARTBEAT_BATCH', 200),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Ignored exceptions
     |--------------------------------------------------------------------------
     |

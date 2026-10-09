@@ -18,7 +18,10 @@ use Throwable;
  */
 class Spool
 {
-    public function __construct(private readonly string $disk = 'local') {}
+    public function __construct(
+        private readonly string $disk = 'local',
+        private readonly ?string $directory = null,
+    ) {}
 
     /**
      * @param  array<string, mixed>  $payload
@@ -239,6 +242,10 @@ class Spool
 
     private function directory(): string
     {
+        if ($this->directory !== null) {
+            return $this->directory;
+        }
+
         $path = config('flare-client.spool.path', 'flare-spool');
 
         return is_string($path) && $path !== '' ? $path : 'flare-spool';
