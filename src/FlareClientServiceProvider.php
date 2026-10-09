@@ -8,6 +8,7 @@ use Illuminate\Console\Events\CommandFinished;
 use Illuminate\Console\Events\ScheduledBackgroundTaskFinished;
 use Illuminate\Console\Events\ScheduledTaskFailed;
 use Illuminate\Console\Events\ScheduledTaskFinished;
+use Illuminate\Console\Events\ScheduledTaskStarting;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Contracts\Debug\ExceptionHandler;
 use Illuminate\Contracts\Foundation\Application;
@@ -36,6 +37,7 @@ class FlareClientServiceProvider extends ServiceProvider
         $this->mergeConfigFrom(__DIR__.'/../config/flare-client.php', 'flare-client');
 
         $this->app->singleton(Reporter::class);
+        $this->app->singleton(Heartbeats::class);
 
         // The fatal handler takes the container and the spool, and nothing
         // else. Both are cheap to hold; the reporting graph behind them is not,
@@ -153,17 +155,40 @@ class FlareClientServiceProvider extends ServiceProvider
      */
     private function registerHeartbeats(): void
     {
+        Event::listen(function (ScheduledTaskStarting $event): void {
+            $this->safely(fn () => $this->heartbeats()->starting($event->task));
+        });
+
+        // A background task has not finished when this fires: its exit code
+        // comes later, in ScheduledBackgroundTaskFinished.
         Event::listen(function (ScheduledTaskFinished $event): void {
-            $this->heartbeats()->record($event->task, ($event->task->exitCode ?? 0) === 0);
+            if ($event->task->runInBackground) {
+                return;
+            }
+
+            $this->safely(fn () => $this->heartbeats()->record($event->task, ($event->task->exitCode ?? 0) === 0));
         });
 
         Event::listen(function (ScheduledTaskFailed $event): void {
-            $this->heartbeats()->record($event->task, false);
+            $this->safely(fn () => $this->heartbeats()->record($event->task, false));
         });
 
         Event::listen(function (ScheduledBackgroundTaskFinished $event): void {
-            $this->heartbeats()->record($event->task, ($event->task->exitCode ?? 0) === 0);
+            $this->safely(fn () => $this->heartbeats()->record($event->task, ($event->task->exitCode ?? 0) === 0, background: true));
         });
+    }
+
+    /**
+     * Nothing a heartbeat does is allowed to reach schedule:run: a task that
+     * ran fine must not be failed by the bookkeeping about it.
+     */
+    private function safely(callable $callback): void
+    {
+        try {
+            $callback();
+        } catch (Throwable) {
+            // Deliberately silent.
+        }
     }
 
     /**

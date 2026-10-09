@@ -102,47 +102,37 @@ class Transport
      * Delivers heartbeat pings and, when the schedule changed, what the app
      * expects to run.
      *
-     * Returns whether the beats are finished with: true for delivered and for
-     * refused-for-good (413, 422), false when they should stay spooled and be
-     * tried again. Heartbeats never go inline, only from the flush, so a slow
-     * flare costs a scheduled run a second and not a user a page.
+     * Heartbeats never touch the circuit breaker. It is shared with error
+     * delivery, and a 404 from a flare that does not have the route yet, or a
+     * 5xx from this one endpoint, must not stop errors being reported. Backing
+     * off is the caller's, on a key of its own, from what this returns.
      *
      * @param  array<int, array<string, mixed>>  $beats
      * @param  array<int, array<string, mixed>>  $schedule
      */
-    public function sendHeartbeats(array $beats, array $schedule): bool
+    public function sendHeartbeats(array $beats, array $schedule): HeartbeatResult
     {
         if ($this->circuit->isOpen()) {
-            return false;
+            return HeartbeatResult::retry(0);
         }
 
         try {
             $response = $this->post('/api/heartbeat', ['beats' => $beats, 'schedule' => $schedule]);
         } catch (Throwable) {
-            $this->circuit->recordFailure();
-
-            return false;
+            return HeartbeatResult::retry(300);
         }
 
-        if ($response->status() === 429) {
-            $this->circuit->muteFor($this->retryAfter($response));
+        $status = $response->status();
 
-            return false;
+        if ($response->successful() || in_array($status, [413, 422], true)) {
+            return HeartbeatResult::done();
         }
 
-        if ($response->successful()) {
-            $this->circuit->recordSuccess();
-
-            return true;
+        if ($status === 429) {
+            return HeartbeatResult::retry($this->retryAfter($response));
         }
 
-        if (in_array($response->status(), [413, 422], true)) {
-            return true;
-        }
-
-        $this->circuit->recordFailure();
-
-        return false;
+        return HeartbeatResult::retry(in_array($status, [401, 403, 404, 405], true) ? 1800 : 300);
     }
 
     /**

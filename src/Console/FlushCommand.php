@@ -8,6 +8,7 @@ use Illuminate\Console\Command;
 use Thijssensoftware\FlareClient\Heartbeat\Heartbeats;
 use Thijssensoftware\FlareClient\Transport\Spool;
 use Thijssensoftware\FlareClient\Transport\Transport;
+use Throwable;
 
 /**
  * Replays spooled events.
@@ -29,12 +30,23 @@ class FlushCommand extends Command
 
     protected $description = 'Send spooled flare events that could not be delivered inline';
 
-    public function handle(Spool $spool, Transport $transport, Heartbeats $heartbeats): int
+    public function handle(Spool $spool, Transport $transport): int
     {
-        // Independent of the event spool, so it runs first: a quiet error spool
-        // is the normal case, and heartbeats must still go out then.
-        $heartbeats->flush();
+        $status = $this->flushEvents($spool, $transport);
 
+        // After the events, and unable to fail the run: errors matter more than
+        // heartbeats, and nothing about a heartbeat may abort schedule:run.
+        try {
+            app(Heartbeats::class)->flush();
+        } catch (Throwable) {
+            // Spooled, so the next minute tries again.
+        }
+
+        return $status;
+    }
+
+    private function flushEvents(Spool $spool, Transport $transport): int
+    {
         $files = $spool->files();
 
         if ($files === []) {

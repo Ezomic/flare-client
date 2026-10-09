@@ -186,6 +186,38 @@ Three things are worth knowing:
 A fatal has no stack, so the frame flare receives is the file and line PHP recorded. That is what
 keeps two exhausted-memory failures in different files apart, which the message alone cannot do.
 
+### Heartbeats
+
+A scheduled task that stops running never throws, so nothing above can see it. Each task that
+finishes appends a ping to a spool of its own, and `flare:flush` sends them to flare in one batch,
+after the events. flare opens a group in its inbox when a task has been quiet past its grace period.
+
+* **Registration is automatic.** The flush also reports the schedule (task, cron expression,
+  timezone) the first time and whenever it changes. Nothing is configured in two places.
+* **A task's name is its artisan command and arguments.** Values that change every run, meaning
+  dates, uuids and numbers of five digits or more (a timestamp, an id), are replaced in the name
+  only, so `->command('report', [now()->timestamp])` stays one task. flare is still shown the real
+  arguments.
+* **An unnamed callback is not monitored.** `$schedule->call(fn () => ...)` is just "Callback" and
+  cannot be told from the next one. Give it `->name('nightly-sync')` and it is. The same goes for
+  `exec` and job tasks, which are known by their description. A one-off debug line says so.
+* **Tasks that decide at run time** (`when`, `skip`, `between`, `unlessBetween`) are pinged but
+  registered without an expression, so flare knows they exist and never alerts on their silence.
+  A task that is not meant to run in maintenance mode is not told apart from one that stopped.
+* **A background task is pinged when it really finishes**, with its exit code, not when it starts.
+* **Heartbeats never touch the error path.** They use their own back-off, kept apart from the
+  circuit breaker errors share: 30 minutes after a 401, 403, 404 or 405 (an older flare without the
+  route), 5 minutes after a 5xx or a connection error, and `Retry-After` after a 429. A flare that
+  does not know the route cannot stop errors being reported. Nothing a heartbeat does can fail a
+  scheduled task or `schedule:run`.
+* **They are bounded.** One flush sends at most `FLARE_HEARTBEAT_MAX_BATCHES` batches (10, of
+  `FLARE_HEARTBEAT_BATCH`, 200) and stops after `FLARE_HEARTBEAT_MAX_SECONDS` (20); the rest waits.
+  A file is claimed by renaming it before it is sent, so a ping written meanwhile is never lost,
+  and a claim whose sender died is picked up again after `FLARE_HEARTBEAT_STALE_CLAIM` seconds.
+* **They share the spool settings.** Heartbeats live in `flare-heartbeats/` beside `flare-spool/`
+  on the same disk, with the same per-file and total caps (applied to each directory), and
+  `FLARE_SPOOL=false` switches them off too. `FLARE_HEARTBEATS=false` switches off only heartbeats.
+
 ### Apps with a custom exception handler
 
 Reporting hooks the framework handler's `reportable()` callback. **An app that has swapped

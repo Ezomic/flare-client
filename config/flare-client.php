@@ -107,6 +107,14 @@ return [
         'enabled' => (bool) env('FLARE_HEARTBEATS', true),
         'path' => env('FLARE_HEARTBEAT_PATH', 'flare-heartbeats'),
         'batch_size' => (int) env('FLARE_HEARTBEAT_BATCH', 200),
+
+        // One flush sends at most this many batches, and stops after this many
+        // seconds, so a backlog cannot hold up the rest of schedule:run.
+        'max_batches' => (int) env('FLARE_HEARTBEAT_MAX_BATCHES', 10),
+        'max_seconds' => (int) env('FLARE_HEARTBEAT_MAX_SECONDS', 20),
+
+        // A claimed file older than this belongs to a flush that died.
+        'stale_claim_seconds' => (int) env('FLARE_HEARTBEAT_STALE_CLAIM', 600),
     ],
 
     /*

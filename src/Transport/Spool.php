@@ -18,6 +18,8 @@ use Throwable;
  */
 class Spool
 {
+    private const CLAIM = '.sending-';
+
     public function __construct(
         private readonly string $disk = 'local',
         private readonly ?string $directory = null,
@@ -129,6 +131,49 @@ class Spool
         }
 
         return $events;
+    }
+
+    /**
+     * Takes a spool file for sending by renaming it, which is atomic on a local
+     * disk: appends made while it is being sent land in a fresh live file and
+     * are not lost when this one is deleted. The claim records when it was made
+     * so a crashed sender's file can be told apart from one still being sent.
+     */
+    public function claim(string $path): ?string
+    {
+        $claimed = $path.self::CLAIM.getmypid().'-'.time();
+
+        try {
+            return Storage::disk($this->disk)->move($path, $claimed) ? $claimed : null;
+        } catch (Throwable) {
+            return null;
+        }
+    }
+
+    /**
+     * Claimed files whose sender is long gone.
+     *
+     * @return array<int, string>
+     */
+    public function staleClaims(int $seconds): array
+    {
+        try {
+            $files = Storage::disk($this->disk)->files($this->directory());
+        } catch (Throwable) {
+            return [];
+        }
+
+        $stale = [];
+
+        foreach ($files as $file) {
+            if (preg_match('/'.preg_quote(self::CLAIM, '/').'\d+-(\d+)$/', $file, $match) === 1 && (int) $match[1] < time() - $seconds) {
+                $stale[] = $file;
+            }
+        }
+
+        sort($stale);
+
+        return $stale;
     }
 
     public function forget(string $path): void
