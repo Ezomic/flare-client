@@ -91,6 +91,34 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Heartbeats
+    |--------------------------------------------------------------------------
+    |
+    | A scheduled task that stops running never throws, so flare watches for
+    | the absence of its ping. Pings are appended to a spool of their own when
+    | a task finishes and sent in one batch by flare:flush, never inline. The
+    | schedule itself (task and cron expression) is reported whenever it
+    | changes, so flare learns what to expect without a second place to
+    | configure it.
+    |
+    */
+
+    'heartbeats' => [
+        'enabled' => (bool) env('FLARE_HEARTBEATS', true),
+        'path' => env('FLARE_HEARTBEAT_PATH', 'flare-heartbeats'),
+        'batch_size' => (int) env('FLARE_HEARTBEAT_BATCH', 200),
+
+        // One flush sends at most this many batches, and stops after this many
+        // seconds, so a backlog cannot hold up the rest of schedule:run.
+        'max_batches' => (int) env('FLARE_HEARTBEAT_MAX_BATCHES', 3),
+        'max_seconds' => (int) env('FLARE_HEARTBEAT_MAX_SECONDS', 5),
+
+        // A claimed file older than this belongs to a flush that died.
+        'stale_claim_seconds' => (int) env('FLARE_HEARTBEAT_STALE_CLAIM', 600),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Ignored exceptions
     |--------------------------------------------------------------------------
     |

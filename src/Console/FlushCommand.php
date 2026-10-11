@@ -5,8 +5,10 @@ declare(strict_types=1);
 namespace Thijssensoftware\FlareClient\Console;
 
 use Illuminate\Console\Command;
+use Thijssensoftware\FlareClient\Heartbeat\Heartbeats;
 use Thijssensoftware\FlareClient\Transport\Spool;
 use Thijssensoftware\FlareClient\Transport\Transport;
+use Throwable;
 
 /**
  * Replays spooled events.
@@ -19,6 +21,10 @@ use Thijssensoftware\FlareClient\Transport\Transport;
  * minute wait for it. A run sends at most --batches requests, each held to the
  * HTTP timeout, which keeps that wait to seconds even with a full spool behind
  * it; whatever is left goes on the next run.
+ *
+ * The heartbeats that follow have a budget of their own, much smaller
+ * (heartbeats.max_batches and heartbeats.max_seconds), because --batches
+ * applies to events only and a ping is never worth holding the scheduler for.
  */
 class FlushCommand extends Command
 {
@@ -29,6 +35,21 @@ class FlushCommand extends Command
     protected $description = 'Send spooled flare events that could not be delivered inline';
 
     public function handle(Spool $spool, Transport $transport): int
+    {
+        $status = $this->flushEvents($spool, $transport);
+
+        // After the events, and unable to fail the run: errors matter more than
+        // heartbeats, and nothing about a heartbeat may abort schedule:run.
+        try {
+            app(Heartbeats::class)->flush();
+        } catch (Throwable) {
+            // Spooled, so the next minute tries again.
+        }
+
+        return $status;
+    }
+
+    private function flushEvents(Spool $spool, Transport $transport): int
     {
         $files = $spool->files();
 

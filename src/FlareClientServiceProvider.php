@@ -7,6 +7,8 @@ namespace Thijssensoftware\FlareClient;
 use Illuminate\Console\Events\CommandFinished;
 use Illuminate\Console\Events\ScheduledBackgroundTaskFinished;
 use Illuminate\Console\Events\ScheduledTaskFailed;
+use Illuminate\Console\Events\ScheduledTaskFinished;
+use Illuminate\Console\Events\ScheduledTaskStarting;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Contracts\Debug\ExceptionHandler;
 use Illuminate\Contracts\Foundation\Application;
@@ -21,6 +23,7 @@ use Thijssensoftware\FlareClient\Console\FlushCommand;
 use Thijssensoftware\FlareClient\Console\TestCommand;
 use Thijssensoftware\FlareClient\Enums\Source;
 use Thijssensoftware\FlareClient\Fatal\FatalReporter;
+use Thijssensoftware\FlareClient\Heartbeat\Heartbeats;
 use Thijssensoftware\FlareClient\Support\JobContext;
 use Thijssensoftware\FlareClient\Support\Runtime;
 use Thijssensoftware\FlareClient\Support\Severity;
@@ -34,6 +37,7 @@ class FlareClientServiceProvider extends ServiceProvider
         $this->mergeConfigFrom(__DIR__.'/../config/flare-client.php', 'flare-client');
 
         $this->app->singleton(Reporter::class);
+        $this->app->singleton(Heartbeats::class);
 
         // The fatal handler takes the container and the spool, and nothing
         // else. Both are cheap to hold; the reporting graph behind them is not,
@@ -58,6 +62,7 @@ class FlareClientServiceProvider extends ServiceProvider
         $this->registerExceptionReporting();
         $this->registerJobFailures();
         $this->registerScheduleFailures();
+        $this->registerHeartbeats();
         $this->registerConsoleFailures();
         $this->registerLogReporting();
         $this->registerFatalErrors();
@@ -141,6 +146,49 @@ class FlareClientServiceProvider extends ServiceProvider
                 ],
             );
         });
+    }
+
+    /**
+     * Pings flare that a scheduled task ran, so one that stops running is
+     * noticed by its silence. A failed run is still a run: the failure itself
+     * is reported above, and what is missing here is only the absence.
+     */
+    private function registerHeartbeats(): void
+    {
+        Event::listen(function (ScheduledTaskStarting $event): void {
+            $this->safely(fn () => $this->heartbeats()->starting($event->task));
+        });
+
+        // A background task has not finished when this fires: its exit code
+        // comes later, in ScheduledBackgroundTaskFinished.
+        Event::listen(function (ScheduledTaskFinished $event): void {
+            if ($event->task->runInBackground || $event->task->skippedBecauseOverlapping) {
+                return;
+            }
+
+            $this->safely(fn () => $this->heartbeats()->record($event->task, ($event->task->exitCode ?? 0) === 0));
+        });
+
+        Event::listen(function (ScheduledTaskFailed $event): void {
+            $this->safely(fn () => $this->heartbeats()->record($event->task, false));
+        });
+
+        Event::listen(function (ScheduledBackgroundTaskFinished $event): void {
+            $this->safely(fn () => $this->heartbeats()->record($event->task, ($event->task->exitCode ?? 0) === 0, background: true));
+        });
+    }
+
+    /**
+     * Nothing a heartbeat does is allowed to reach schedule:run: a task that
+     * ran fine must not be failed by the bookkeeping about it.
+     */
+    private function safely(callable $callback): void
+    {
+        try {
+            $callback();
+        } catch (Throwable) {
+            // Deliberately silent.
+        }
     }
 
     /**
@@ -265,6 +313,11 @@ class FlareClientServiceProvider extends ServiceProvider
                 ->everyMinute()
                 ->withoutOverlapping(5);
         });
+    }
+
+    private function heartbeats(): Heartbeats
+    {
+        return $this->app->make(Heartbeats::class);
     }
 
     private function reporter(): Reporter

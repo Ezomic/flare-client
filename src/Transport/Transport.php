@@ -99,6 +99,43 @@ class Transport
     }
 
     /**
+     * Delivers heartbeat pings and, when the schedule changed, what the app
+     * expects to run.
+     *
+     * Heartbeats never touch the circuit breaker. It is shared with error
+     * delivery, and a 404 from a flare that does not have the route yet, or a
+     * 5xx from this one endpoint, must not stop errors being reported. Backing
+     * off is the caller's, on a key of its own, from what this returns.
+     *
+     * @param  array<int, array<string, mixed>>  $beats
+     * @param  array<int, array<string, mixed>>  $schedule
+     */
+    public function sendHeartbeats(array $beats, array $schedule): HeartbeatResult
+    {
+        if ($this->circuit->isOpen()) {
+            return HeartbeatResult::retry(0);
+        }
+
+        try {
+            $response = $this->post('/api/heartbeat', ['beats' => $beats, 'schedule' => $schedule]);
+        } catch (Throwable) {
+            return HeartbeatResult::retry(300);
+        }
+
+        $status = $response->status();
+
+        if ($response->successful() || in_array($status, [413, 422], true)) {
+            return HeartbeatResult::done();
+        }
+
+        if ($status === 429) {
+            return HeartbeatResult::retry($this->retryAfter($response));
+        }
+
+        return HeartbeatResult::retry(in_array($status, [404, 405], true) ? 1800 : 300);
+    }
+
+    /**
      * How many events flare says it took.
      *
      * A 202 with no count is the whole batch: the status is the answer and the
