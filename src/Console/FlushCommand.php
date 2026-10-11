@@ -21,6 +21,10 @@ use Throwable;
  * minute wait for it. A run sends at most --batches requests, each held to the
  * HTTP timeout, which keeps that wait to seconds even with a full spool behind
  * it; whatever is left goes on the next run.
+ *
+ * The heartbeats that follow have a budget of their own, much smaller
+ * (heartbeats.max_batches and heartbeats.max_seconds), because --batches
+ * applies to events only and a ping is never worth holding the scheduler for.
  */
 class FlushCommand extends Command
 {

@@ -53,9 +53,9 @@ final class TaskKey
         $command = $event->command;
 
         if (is_string($command) && preg_match("/\\s'?artisan'?\\s+(.+)\$/s", $command, $match) === 1) {
-            return trim($match[1]);
+            return mb_substr(trim($match[1]), 0, 255);
         }
 
-        return $event->getSummaryForDisplay();
+        return mb_substr($event->getSummaryForDisplay(), 0, 255);
     }
 }

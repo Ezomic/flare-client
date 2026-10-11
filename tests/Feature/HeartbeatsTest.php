@@ -119,6 +119,25 @@ describe('recording', function (): void {
         expect(array_column(spooledBeats(), 'outcome'))->toBe(['failure', 'failure']);
     });
 
+    it('does not ping for a run skipped because the last one still holds its mutex', function (): void {
+        $task = schedule()->command('stuck')->everyMinute()->withoutOverlapping();
+        $task->skippedBecauseOverlapping = true;
+
+        finish($task);
+
+        $heartbeats = app(Heartbeats::class);
+        $heartbeats->record($task, true);
+        $heartbeats->record($task, true, background: true);
+
+        expect(spooledBeats())->toBe([]);
+
+        $task->skippedBecauseOverlapping = false;
+        event(new ScheduledTaskStarting($task));
+        finish($task);
+
+        expect(spooledBeats())->toHaveCount(1);
+    });
+
     it('waits for a background task to really finish', function (): void {
         $task = schedule()->command('slow:job')->runInBackground();
 
@@ -141,7 +160,8 @@ describe('recording', function (): void {
         finish(schedule()->command('c')->hourly()->between('08:00', '18:00'));
         finish(schedule()->command('d')->hourly());
 
-        expect(array_column(spooledBeats(), 'expression'))->toBe([null, null, null, '0 * * * *']);
+        expect(array_column(spooledBeats(), 'expression'))->toBe([null, null, null, '0 * * * *'])
+            ->and(array_map(fn (array $beat): bool => $beat['scheduled'] ?? true, spooledBeats()))->toBe([false, false, false, true]);
     });
 
     it('falls back to the app timezone, and accepts a timezone object', function (): void {
@@ -276,6 +296,15 @@ describe('flushing', function (): void {
             ->and(Cache::get('flare-client:open-until'))->toBeNull()
             ->and(Cache::get('flare-client:failures'))->toBeNull();
 
+    });
+
+    it('backs off for five minutes on a 401 or 403, not half an hour', function (): void {
+        Http::fake(['*' => Http::response([], 401)]);
+
+        finish(schedule()->command('a'));
+        $this->artisan('flare:flush')->assertOk();
+
+        expect(Cache::get('flare-client:heartbeat-backoff-until'))->toBeBetween(time() + 200, time() + 400);
     });
 
     it('backs off for five minutes on a 5xx', function (): void {
@@ -417,8 +446,8 @@ describe('flushing', function (): void {
         $this->artisan('flare:flush')->assertOk();
 
         Http::assertSent(fn ($request) => $request['schedule'] === [
-            ['task' => 'a', 'description' => 'a', 'expression' => '0 * * * *', 'timezone' => 'UTC'],
-            ['task' => 'f', 'description' => 'f', 'expression' => null, 'timezone' => 'UTC'],
+            ['task' => 'a', 'description' => 'a', 'timezone' => 'UTC', 'expression' => '0 * * * *'],
+            ['task' => 'f', 'description' => 'f', 'timezone' => 'UTC', 'expression' => null, 'scheduled' => false],
         ]);
 
         Http::fake(['*' => Http::response([], 202)]);
@@ -432,6 +461,61 @@ describe('flushing', function (): void {
         $this->artisan('flare:flush')->assertOk();
 
         Http::assertSent(fn ($request) => $request['beats'] === [] && count($request['schedule']) === 3);
+    });
+
+    it('does not resend the schedule because a description changed', function (): void {
+        Http::fake(['*' => Http::response([], 202)]);
+
+        $task = schedule()->command('report 1');
+        $task->description('first');
+        $this->artisan('flare:flush')->assertOk();
+
+        Http::assertSentCount(1);
+
+        $task->description('second');
+        $this->artisan('flare:flush')->assertOk();
+
+        Http::assertSentCount(1);
+    });
+
+    it('truncates a long description so the server never refuses the batch', function (): void {
+        $task = schedule()->command('report '.str_repeat('x', 400));
+
+        expect(mb_strlen(TaskKey::description($task)))->toBe(255)
+            ->and(mb_strlen(TaskKey::description(schedule()->call(fn () => 1)->name(str_repeat('n', 400)))))->toBe(255);
+    });
+
+    it('claims files one at a time, so stopping early strands none', function (): void {
+        config()->set('flare-client.heartbeats.max_batches', 1);
+        Http::fake(['*' => Http::response([], 202)]);
+
+        Storage::disk('local')->put('flare-heartbeats/2026-10-01.jsonl', json_encode(['task' => 'one', 'outcome' => 'success'])."\n");
+        Storage::disk('local')->put('flare-heartbeats/2026-10-02.jsonl', json_encode(['task' => 'two', 'outcome' => 'success'])."\n");
+        Storage::disk('local')->put('flare-heartbeats/2026-10-03.jsonl', json_encode(['task' => 'three', 'outcome' => 'success'])."\n");
+
+        $this->artisan('flare:flush')->assertOk();
+
+        expect(Storage::disk('local')->files('flare-heartbeats'))->toBe([
+            'flare-heartbeats/2026-10-02.jsonl',
+            'flare-heartbeats/2026-10-03.jsonl',
+        ]);
+    });
+
+    it('skips a file it cannot claim and leaves it in place', function (): void {
+        Http::fake();
+
+        Storage::disk('local')->put('flare-heartbeats/2026-10-01.jsonl', json_encode(['task' => 'one', 'outcome' => 'success'])."\n");
+        $directory = Storage::disk('local')->path('flare-heartbeats');
+        chmod($directory, 0555);
+
+        try {
+            $this->artisan('flare:flush')->assertOk();
+        } finally {
+            chmod($directory, 0755);
+        }
+
+        Http::assertNothingSent();
+        expect(Storage::disk('local')->files('flare-heartbeats'))->toBe(['flare-heartbeats/2026-10-01.jsonl']);
     });
 
     it('sends nothing when there is nothing to say', function (): void {

@@ -132,7 +132,7 @@ class Transport
             return HeartbeatResult::retry($this->retryAfter($response));
         }
 
-        return HeartbeatResult::retry(in_array($status, [401, 403, 404, 405], true) ? 1800 : 300);
+        return HeartbeatResult::retry(in_array($status, [404, 405], true) ? 1800 : 300);
     }
 
     /**

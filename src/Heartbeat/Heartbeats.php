@@ -60,6 +60,13 @@ class Heartbeats
             return;
         }
 
+        // Skipped because the previous run still holds its mutex: nothing ran,
+        // so there is nothing to report, and a success here would hide a task
+        // that is stuck.
+        if ($task->skippedBecauseOverlapping) {
+            return;
+        }
+
         $key = TaskKey::for($task);
 
         if ($key === null) {
@@ -79,8 +86,8 @@ class Heartbeats
             'description' => TaskKey::description($task),
             'outcome' => $succeeded ? 'success' : 'failure',
             'at' => now()->toIso8601String(),
-            'expression' => $this->scheduled($task) ? $task->getExpression() : null,
             'timezone' => $this->timezone($task),
+            ...$this->expression($task),
         ]);
     }
 
@@ -101,12 +108,25 @@ class Heartbeats
         }
 
         $schedule = $this->expected();
-        $hash = hash('sha256', (string) json_encode($schedule));
+        $hash = hash('sha256', (string) json_encode(array_map(
+            fn (array $task): array => [$task['task'], $task['expression'], $task['timezone']],
+            $schedule,
+        )));
         $pending = $this->hashChanged($hash) ? $schedule : [];
-        $run = new Run(microtime(true), $this->intConfig('max_batches', 10), $this->intConfig('max_seconds', 20));
+        $run = new Run(microtime(true), $this->intConfig('max_batches', 3), $this->intConfig('max_seconds', 5));
         $sent = 0;
 
-        foreach ($this->files() as $file) {
+        foreach ($this->files() as [$path, $claimed]) {
+            if ($run->spent()) {
+                break;
+            }
+
+            $file = $claimed ? $path : $this->spool->claim($path);
+
+            if ($file === null) {
+                continue;
+            }
+
             $beats = $this->spool->read($file);
 
             foreach (array_chunk($beats, $this->batchSize()) as $index => $chunk) {
@@ -143,21 +163,23 @@ class Heartbeats
     }
 
     /**
-     * The files to send, each claimed first so that an append made while it is
-     * being sent is not deleted with it, plus any claim whose sender died.
+     * The files to send: claims whose sender died, then the live files. A live
+     * file is claimed (renamed) only when the loop reaches it, so that an early
+     * stop leaves later files as ordinary spool files and not as claims no one
+     * will finish for ten minutes.
      *
-     * @return array<int, string>
+     * @return array<int, array{string, bool}>
      */
     private function files(): array
     {
-        $files = $this->spool->staleClaims($this->intConfig('stale_claim_seconds', 600));
+        $files = [];
+
+        foreach ($this->spool->staleClaims($this->intConfig('stale_claim_seconds', 600)) as $claim) {
+            $files[] = [$claim, true];
+        }
 
         foreach ($this->spool->files() as $file) {
-            $claimed = $this->spool->claim($file);
-
-            if ($claimed !== null) {
-                $files[] = $claimed;
-            }
+            $files[] = [$file, false];
         }
 
         return $files;
@@ -193,14 +215,29 @@ class Heartbeats
             $tasks[$key] = [
                 'task' => $key,
                 'description' => TaskKey::description($event),
-                'expression' => $this->scheduled($event) ? $event->getExpression() : null,
                 'timezone' => $this->timezone($event),
+                ...$this->expression($event),
             ];
         }
 
         ksort($tasks);
 
         return array_values($tasks);
+    }
+
+    /**
+     * The expression to report, or none and an explicit marker for a task whose
+     * cron line is only an upper bound. The marker is what lets flare stop
+     * alerting on a task that has just been given a filter; an older flare
+     * ignores the extra field.
+     *
+     * @return array{expression: string|null, scheduled?: false}
+     */
+    private function expression(Event $event): array
+    {
+        return $this->scheduled($event)
+            ? ['expression' => $event->getExpression()]
+            : ['expression' => null, 'scheduled' => false];
     }
 
     /**

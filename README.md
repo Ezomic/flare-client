@@ -120,7 +120,8 @@ It runs in the foreground of `schedule:run`, not in the background. Most apps ru
 a oneshot systemd unit, and systemd kills everything in the unit once `schedule:run` exits, so a
 backgrounded flush died before it could send anything. In the foreground the app's other tasks that
 minute wait for it, which is why one run sends at most 10 batches (`--batches`) and leaves the rest
-of the spool for the next minute.
+of the spool for the next minute. Heartbeats have a smaller budget of their own (see below), and
+`--batches` does not apply to them.
 
 **An app whose cron does not run `schedule:run` will spool and never drain.** Delivery is built on
 the scheduler rather than on a queued job precisely because six apps in the estate have no queue
@@ -193,25 +194,29 @@ finishes appends a ping to a spool of its own, and `flare:flush` sends them to f
 after the events. flare opens a group in its inbox when a task has been quiet past its grace period.
 
 * **Registration is automatic.** The flush also reports the schedule (task, cron expression,
-  timezone) the first time and whenever it changes. Nothing is configured in two places.
+  timezone) the first time and whenever it changes (a changing description alone does not count). Nothing is configured in two places.
 * **A task's name is its artisan command and arguments.** Values that change every run, meaning
   dates, uuids and numbers of five digits or more (a timestamp, an id), are replaced in the name
   only, so `->command('report', [now()->timestamp])` stays one task. flare is still shown the real
   arguments.
 * **An unnamed callback is not monitored.** `$schedule->call(fn () => ...)` is just "Callback" and
   cannot be told from the next one. Give it `->name('nightly-sync')` and it is. The same goes for
-  `exec` and job tasks, which are known by their description. A one-off debug line says so.
+  `exec` and job tasks, which are monitored too, by their description as the key. Once per process, a
+  debug line says an unnamed callback is being skipped.
 * **Tasks that decide at run time** (`when`, `skip`, `between`, `unlessBetween`) are pinged but
-  registered without an expression, so flare knows they exist and never alerts on their silence.
+  registered without an expression and marked `scheduled: false`, so flare knows they exist, never
+  alerts on their silence, and stops alerting on one that was only just given a filter.
   A task that is not meant to run in maintenance mode is not told apart from one that stopped.
+* **A run that was skipped for overlap is not pinged**: nothing ran, and a success would hide a
+  task that is stuck holding its mutex.
 * **A background task is pinged when it really finishes**, with its exit code, not when it starts.
 * **Heartbeats never touch the error path.** They use their own back-off, kept apart from the
-  circuit breaker errors share: 30 minutes after a 401, 403, 404 or 405 (an older flare without the
-  route), 5 minutes after a 5xx or a connection error, and `Retry-After` after a 429. A flare that
+  circuit breaker errors share: 30 minutes after a 404 or 405 (an older flare without the
+  route), 5 minutes after a 401, 403, 5xx or a connection error, and `Retry-After` after a 429. A flare that
   does not know the route cannot stop errors being reported. Nothing a heartbeat does can fail a
   scheduled task or `schedule:run`.
-* **They are bounded.** One flush sends at most `FLARE_HEARTBEAT_MAX_BATCHES` batches (10, of
-  `FLARE_HEARTBEAT_BATCH`, 200) and stops after `FLARE_HEARTBEAT_MAX_SECONDS` (20); the rest waits.
+* **They are bounded.** One flush sends at most `FLARE_HEARTBEAT_MAX_BATCHES` batches (3, of
+  `FLARE_HEARTBEAT_BATCH`, 200) and stops after `FLARE_HEARTBEAT_MAX_SECONDS` (5); the rest waits.
   A file is claimed by renaming it before it is sent, so a ping written meanwhile is never lost,
   and a claim whose sender died is picked up again after `FLARE_HEARTBEAT_STALE_CLAIM` seconds.
 * **They share the spool settings.** Heartbeats live in `flare-heartbeats/` beside `flare-spool/`
