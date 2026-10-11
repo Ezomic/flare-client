@@ -234,6 +234,58 @@ describe('recording', function (): void {
     });
 });
 
+describe('overlap protection is not a filter', function (): void {
+    function reportedExpression(Event $task): ?string
+    {
+        finish($task);
+
+        $beats = spooledBeats();
+        $beat = end($beats);
+
+        return $beat['scheduled'] ?? true ? $beat['expression'] : null;
+    }
+
+    it('keeps the expression of a task that only prevents overlap', function (): void {
+        expect(reportedExpression(schedule()->command('a')->everyFiveMinutes()->withoutOverlapping()))->toBe('*/5 * * * *')
+            ->and(reportedExpression(schedule()->command('b')->everyFiveMinutes()->withoutOverlapping()->withoutOverlapping(10)))->toBe('*/5 * * * *')
+            ->and(reportedExpression(schedule()->call(fn () => 1)->name('c')->everyFiveMinutes()->withoutOverlapping()))->toBe('*/5 * * * *')
+            ->and(reportedExpression(schedule()->command('d')->everyFiveMinutes()->withoutOverlapping()->onOneServer()))->toBe('*/5 * * * *')
+            ->and(array_filter(array_column(spooledBeats(), 'scheduled')))->toBe([]);
+    });
+
+    it('still treats a skip the app added as a filter, whatever the order', function (): void {
+        expect(reportedExpression(schedule()->command('a')->everyFiveMinutes()->withoutOverlapping()->skip(fn () => false)))->toBeNull()
+            ->and(reportedExpression(schedule()->command('b')->everyFiveMinutes()->skip(fn () => false)->withoutOverlapping()))->toBeNull()
+            ->and(reportedExpression(schedule()->command('c')->everyFiveMinutes()->withoutOverlapping()->skip('is_null')))->toBeNull()
+            ->and(reportedExpression(schedule()->call(fn () => 1)->name('d')->everyFiveMinutes()->withoutOverlapping()->skip(fn () => false)))->toBeNull();
+    });
+
+    it('still treats when and between as filters next to overlap protection', function (): void {
+        expect(reportedExpression(schedule()->command('a')->everyFiveMinutes()->when(fn () => true)->withoutOverlapping()))->toBeNull()
+            ->and(reportedExpression(schedule()->command('b')->everyFiveMinutes()->withoutOverlapping()->between('08:00', '18:00')))->toBeNull()
+            ->and(reportedExpression(schedule()->call(fn () => 1)->name('c')->everyFiveMinutes()->withoutOverlapping()->when(fn () => true)))->toBeNull();
+    });
+
+    it('registers a task with overlap protection with its expression, once', function (): void {
+        Http::fake(['*' => Http::response([], 202)]);
+
+        schedule()->command('nightly:backup')->dailyAt('03:00')->withoutOverlapping();
+        schedule()->call(fn () => 1)->name('sync')->hourly()->withoutOverlapping();
+
+        $this->artisan('flare:flush')->assertOk();
+
+        Http::assertSent(fn ($request) => $request['schedule'] === [
+            ['task' => 'nightly:backup', 'description' => 'nightly:backup', 'timezone' => 'UTC', 'expression' => '0 3 * * *'],
+            ['task' => 'sync', 'description' => 'sync', 'timezone' => 'UTC', 'expression' => '0 * * * *'],
+        ]);
+
+        Http::fake(['*' => Http::response([], 202)]);
+        $this->artisan('flare:flush')->assertOk();
+
+        Http::assertNothingSent();
+    });
+});
+
 describe('flushing', function (): void {
     it('sends spooled pings in one batch and clears the spool', function (): void {
         Http::fake(['*' => Http::response(['accepted' => 2], 202)]);
