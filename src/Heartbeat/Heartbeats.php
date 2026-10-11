@@ -4,10 +4,13 @@ declare(strict_types=1);
 
 namespace Thijssensoftware\FlareClient\Heartbeat;
 
+use Closure;
 use Illuminate\Console\Scheduling\Event;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
+use ReflectionFunction;
+use ReflectionMethod;
 use ReflectionProperty;
 use Thijssensoftware\FlareClient\Transport\Spool;
 use Thijssensoftware\FlareClient\Transport\Transport;
@@ -242,20 +245,50 @@ class Heartbeats
 
     /**
      * Whether the cron expression says when the task really runs. A filter
-     * (when, between, skip) or a reject decides at run time, so the expression
-     * is only an upper bound and flare must not alert on its silence.
+     * (when, between) or a reject (skip) the app wrote decides at run time, so
+     * the expression is only an upper bound and flare must not alert on its
+     * silence.
+     *
+     * withoutOverlapping() is not one of those: it adds a skip of its own, the
+     * mutex check, to every task that uses it, which is nearly every task.
+     * Counting it made all of them unscheduled.
      */
     private function scheduled(Event $event): bool
     {
-        foreach (['filters', 'rejects'] as $property) {
-            $rules = (new ReflectionProperty(Event::class, $property))->getValue($event);
+        $filters = (new ReflectionProperty(Event::class, 'filters'))->getValue($event);
+        $rejects = (new ReflectionProperty(Event::class, 'rejects'))->getValue($event);
 
-            if (is_array($rules) && $rules !== []) {
-                return false;
-            }
+        if (is_array($filters) && $filters !== []) {
+            return false;
         }
 
-        return true;
+        return ! is_array($rejects) || $this->userRejects($event, $rejects) === 0;
+    }
+
+    /**
+     * How many of the rejects are the app's own.
+     *
+     * The framework's one is a closure created inside withoutOverlapping(), so
+     * it lives in the file that method is defined in, whichever Laravel
+     * version and whether on a command or a callback. Telling it apart by
+     * where it was written, and not by counting calls, keeps a skip() the app
+     * added next to it counted, and withoutOverlapping() called twice (two
+     * identical framework closures) from counting at all.
+     *
+     * @param  array<array-key, mixed>  $rejects
+     */
+    private function userRejects(Event $event, array $rejects): int
+    {
+        $own = array_unique([
+            (new ReflectionMethod(Event::class, 'withoutOverlapping'))->getFileName(),
+            (new ReflectionMethod($event, 'withoutOverlapping'))->getFileName(),
+        ]);
+
+        return count(array_filter(
+            $rejects,
+            fn (mixed $reject): bool => ! $reject instanceof Closure
+                || ! in_array((new ReflectionFunction($reject))->getFileName(), $own, true),
+        ));
     }
 
     private function ignored(string $key): bool
