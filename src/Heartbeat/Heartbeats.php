@@ -9,6 +9,7 @@ use Illuminate\Console\Scheduling\Event;
 use Illuminate\Console\Scheduling\Schedule;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Log;
+use ReflectionClass;
 use ReflectionFunction;
 use ReflectionMethod;
 use ReflectionProperty;
@@ -51,6 +52,47 @@ class Heartbeats
     public function starting(Event $task): void
     {
         unset($this->recorded[$task]);
+
+        // Laravel 11 and 12 do not say when a run was skipped for overlap, so
+        // skipped() reads a missing exit code instead, and that needs the last
+        // run's code out of the way. Only a task that can be skipped is touched.
+        if ($task->withoutOverlapping && ! $this->reportsSkips()) {
+            $task->exitCode = null;
+        }
+    }
+
+    /**
+     * Whether a run that finished was in fact skipped because the previous one
+     * still holds its mutex. Laravel dispatches ScheduledTaskFinished for it
+     * all the same.
+     *
+     * Laravel 13 flags this on the task. On 11 and 12 nothing does, but a run
+     * that really ran always ends in finish(), which sets an exit code, so a
+     * task that can overlap and has none was skipped. Only meaningful from the
+     * finished event: a run that threw also ends without a code.
+     */
+    public function skipped(Event $task): bool
+    {
+        return $this->reportsSkips() ? (bool) $task->skippedBecauseOverlapping : $task->withoutOverlapping && $task->exitCode === null;
+    }
+
+    /**
+     * Skipped because the previous run still holds its mutex: nothing ran, so
+     * there is nothing to report, and a success here would hide a task that is
+     * stuck.
+     */
+    private function flaggedSkipped(Event $task): bool
+    {
+        return $this->reportsSkips() && $task->skippedBecauseOverlapping;
+    }
+
+    /**
+     * Whether this Laravel flags a skipped run on the task, which only 13 does.
+     * Protected so a test can take the 11 and 12 path on 13.
+     */
+    protected function reportsSkips(): bool
+    {
+        return (new ReflectionClass(Event::class))->hasProperty('skippedBecauseOverlapping');
     }
 
     /**
@@ -59,14 +101,7 @@ class Heartbeats
      */
     public function record(Event $task, bool $succeeded, bool $background = false): void
     {
-        if (! $this->enabled() || (! $background && isset($this->recorded[$task]))) {
-            return;
-        }
-
-        // Skipped because the previous run still holds its mutex: nothing ran,
-        // so there is nothing to report, and a success here would hide a task
-        // that is stuck.
-        if ($task->skippedBecauseOverlapping) {
+        if (! $this->enabled() || (! $background && isset($this->recorded[$task])) || $this->flaggedSkipped($task)) {
             return;
         }
 

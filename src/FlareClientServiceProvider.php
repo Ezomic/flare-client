@@ -162,11 +162,13 @@ class FlareClientServiceProvider extends ServiceProvider
         // A background task has not finished when this fires: its exit code
         // comes later, in ScheduledBackgroundTaskFinished.
         Event::listen(function (ScheduledTaskFinished $event): void {
-            if ($event->task->runInBackground || $event->task->skippedBecauseOverlapping) {
-                return;
-            }
+            $this->safely(function () use ($event): void {
+                if ($event->task->runInBackground || $this->heartbeats()->skipped($event->task)) {
+                    return;
+                }
 
-            $this->safely(fn () => $this->heartbeats()->record($event->task, ($event->task->exitCode ?? 0) === 0));
+                $this->heartbeats()->record($event->task, ($event->task->exitCode ?? 0) === 0);
+            });
         });
 
         Event::listen(function (ScheduledTaskFailed $event): void {
