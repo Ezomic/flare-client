@@ -77,13 +77,12 @@ jobs:
         run: composer ci:check
 
       # PHPStan analyses against the installed framework, so on 11 and 12 it reports
-      # that version differences (a property only 13 has) and Spool types that 13
-      # does not. Types are checked once, against the newest; the older legs test.
-      - name: Run lint and tests
+      # version differences (a property only 13 has) and Spool types that 13 does
+      # not. Types are checked once, against the newest; the older legs lint, and
+      # the coverage step below runs their tests.
+      - name: Run lint
         if: matrix.laravel != '13'
-        run: |
-          composer lint:check
-          composer test
+        run: composer lint:check
 
       # The package runs inside every app in the estate, which makes it the
       # worst place to have weaker checks than the apps it watches.

@@ -39,6 +39,8 @@ class Heartbeats
 
     private bool $warnedUnnamed = false;
 
+    private ?bool $reportsFlag = null;
+
     public function __construct(private readonly Transport $transport, private readonly Schedule $schedule)
     {
         $this->spool = new Spool('local', $this->path());
@@ -92,7 +94,7 @@ class Heartbeats
      */
     protected function reportsSkips(): bool
     {
-        return (new ReflectionClass(Event::class))->hasProperty('skippedBecauseOverlapping');
+        return $this->reportsFlag ??= (new ReflectionClass(Event::class))->hasProperty('skippedBecauseOverlapping');
     }
 
     /**
