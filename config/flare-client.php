@@ -246,4 +246,21 @@ return [
 
     'release_file' => env('FLARE_RELEASE_FILE', 'release.sha'),
 
+    /*
+    |--------------------------------------------------------------------------
+    | Source maps
+    |--------------------------------------------------------------------------
+    |
+    | flare:sourcemaps sends a build's maps in requests no larger than this, so
+    | a big frontend does not need one huge body. flare's web server has to
+    | accept at least this much (client_max_body_size, post_max_size), and PHP
+    | there drops files past max_file_uploads (20 by default) without saying so.
+    |
+    */
+
+    'sourcemaps' => [
+        'batch_bytes' => (int) env('FLARE_SOURCEMAP_BATCH_BYTES', 16 * 1024 * 1024),
+        'batch_files' => (int) env('FLARE_SOURCEMAP_BATCH_FILES', 20),
+    ],
+
 ];
