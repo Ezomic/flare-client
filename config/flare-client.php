@@ -212,6 +212,28 @@ return [
 
     /*
     |--------------------------------------------------------------------------
+    | Breadcrumbs
+    |--------------------------------------------------------------------------
+    |
+    | The last few log records of the process, attached to an event so it says
+    | what the app was doing before it failed. Captured whether or not the log
+    | source is on, scrubbed like everything else, and reset at the start of
+    | every queue job, scheduled task and Octane request. They are the first
+    | thing dropped when a payload is over max_payload_bytes.
+    |
+    | limit is capped at 100 and max_bytes at 64 KB whatever is set here, so a
+    | typo cannot make the buffer unbounded. A limit of 0 switches them off.
+    |
+    */
+
+    'breadcrumbs' => [
+        'enabled' => (bool) env('FLARE_BREADCRUMBS', true),
+        'limit' => (int) env('FLARE_BREADCRUMBS_LIMIT', 20),
+        'max_bytes' => (int) env('FLARE_BREADCRUMBS_MAX_BYTES', 16384),
+    ],
+
+    /*
+    |--------------------------------------------------------------------------
     | Spool
     |--------------------------------------------------------------------------
     |

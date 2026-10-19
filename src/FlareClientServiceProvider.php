@@ -15,9 +15,11 @@ use Illuminate\Contracts\Foundation\Application;
 use Illuminate\Foundation\Exceptions\Handler as FoundationHandler;
 use Illuminate\Log\Events\MessageLogged;
 use Illuminate\Queue\Events\JobFailed;
+use Illuminate\Queue\Events\JobProcessing;
 use Illuminate\Support\Facades\Event;
 use Illuminate\Support\ServiceProvider;
 use RuntimeException;
+use Thijssensoftware\FlareClient\Breadcrumbs\Breadcrumbs;
 use Thijssensoftware\FlareClient\Console\DoctorCommand;
 use Thijssensoftware\FlareClient\Console\FlushCommand;
 use Thijssensoftware\FlareClient\Console\TestCommand;
@@ -38,6 +40,7 @@ class FlareClientServiceProvider extends ServiceProvider
 
         $this->app->singleton(Reporter::class);
         $this->app->singleton(Heartbeats::class);
+        $this->app->singleton(Breadcrumbs::class);
 
         // The fatal handler takes the container and the spool, and nothing
         // else. Both are cheap to hold; the reporting graph behind them is not,
@@ -65,6 +68,7 @@ class FlareClientServiceProvider extends ServiceProvider
         $this->registerHeartbeats();
         $this->registerConsoleFailures();
         $this->registerLogReporting();
+        $this->registerBreadcrumbResets();
         $this->registerFatalErrors();
         $this->scheduleFlush();
     }
@@ -232,30 +236,65 @@ class FlareClientServiceProvider extends ServiceProvider
     private function registerLogReporting(): void
     {
         Event::listen(function (MessageLogged $event): void {
-            // Checked here rather than left to the reporter: every log line in
-            // the app passes through this listener, and an app with the source
-            // switched off should not pay for building a throwable per line.
-            if (config('flare-client.sources.log', false) !== true) {
-                return;
-            }
+            $this->reportLoggedMessage($event);
 
-            if (! Severity::reaches($event->level, $this->logLevel())) {
-                return;
-            }
+            // After the report, so a record that is itself reported does not
+            // arrive as the breadcrumb of its own event.
+            $this->breadcrumbs()->record($event->level, $event->message, $event->context, $this->channel());
+        });
+    }
 
-            // A record carrying an exception is one the handler has already
-            // reported, or is about to. Reporting it here as well would double
-            // count it and hide the real stack behind the log call's.
-            if (isset($event->context['exception'])) {
-                return;
-            }
+    private function reportLoggedMessage(MessageLogged $event): void
+    {
+        // Checked here rather than left to the reporter: every log line in
+        // the app passes through this listener, and an app with the source
+        // switched off should not pay for building a throwable per line.
+        if (config('flare-client.sources.log', false) !== true) {
+            return;
+        }
 
-            $this->reporter()->report(
-                new LoggedMessage($event->message),
-                Source::Log,
-                ['channel' => $this->channel(), 'context' => $event->context],
-                $event->level,
-            );
+        if (! Severity::reaches($event->level, $this->logLevel())) {
+            return;
+        }
+
+        // A record carrying an exception is one the handler has already
+        // reported, or is about to. Reporting it here as well would double
+        // count it and hide the real stack behind the log call's.
+        if (isset($event->context['exception'])) {
+            return;
+        }
+
+        $this->reporter()->report(
+            new LoggedMessage($event->message),
+            Source::Log,
+            ['channel' => $this->channel(), 'context' => $event->context],
+            $event->level,
+        );
+    }
+
+    /**
+     * A queue worker, a long schedule:run and an Octane worker are each one
+     * process for many units of work. Without a reset, the breadcrumbs of
+     * job 200 would be those of jobs 1 to 199.
+     *
+     * A sync job (or a deferred one) runs inside the request or command that
+     * dispatched it, so it keeps that unit's breadcrumbs. Octane's event is named by string because
+     * the package does not require Octane.
+     */
+    private function registerBreadcrumbResets(): void
+    {
+        Event::listen(function (JobProcessing $event): void {
+            if (! $this->runsInProcess($event->connectionName)) {
+                $this->breadcrumbs()->reset();
+            }
+        });
+
+        Event::listen(function (ScheduledTaskStarting $event): void {
+            $this->breadcrumbs()->reset();
+        });
+
+        Event::listen('Laravel\\Octane\\Events\\RequestReceived', function (): void {
+            $this->breadcrumbs()->reset();
         });
     }
 
@@ -313,6 +352,18 @@ class FlareClientServiceProvider extends ServiceProvider
                 ->everyMinute()
                 ->withoutOverlapping(5);
         });
+    }
+
+    private function runsInProcess(string $connection): bool
+    {
+        $driver = config('queue.connections.'.$connection.'.driver', $connection);
+
+        return in_array($driver, ['sync', 'deferred', 'background'], true);
+    }
+
+    private function breadcrumbs(): Breadcrumbs
+    {
+        return $this->app->make(Breadcrumbs::class);
     }
 
     private function heartbeats(): Heartbeats

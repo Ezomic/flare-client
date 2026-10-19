@@ -159,6 +159,37 @@ and reporting them twice would hide the real stack behind the log call's.
 flare has its own switch per project on top of this one, so log capture can be refused centrally
 without redeploying the app.
 
+### Breadcrumbs
+
+An exception says where a request died. The log lines just before it usually say what it was doing,
+and they live in a file on the server. An event carries the last `FLARE_BREADCRUMBS_LIMIT` (20) log
+records of the process as `breadcrumbs`, when there were any: level, message, channel, timestamp
+and context, oldest first. The event's own exception is the line after the last of them.
+
+* **Not the log source.** The log source reports a record as its own event; breadcrumbs attach
+  records to another event. They are captured whether `FLARE_SOURCE_LOG` is on or off, at every
+  level, and a record the log source reports is not repeated as a breadcrumb of its own event.
+* **Scrubbed when recorded**, with the same layers as everything else, so a token in a log
+  context never sits in memory in the clear. Free text gets one more layer, because a log message is
+  a sentence and the secret in it is a part: bearer tokens, JWTs, provider keys, long hex, card
+  numbers and `token=...` style pairs are replaced where they stand. Messages are cut to 300
+  characters, context to 1 KB (otherwise replaced by a marker), its first 20 keys and 3 levels.
+  Objects are never held, only `[object]`.
+* **Reset per unit of work.** A queue worker is one process for thousands of jobs, so the buffer is
+  emptied at the start of every job, every scheduled task and every Octane request. A job on a
+  `sync`, `deferred` or `background` connection runs inside the request or command that dispatched
+  it and keeps that unit's breadcrumbs.
+* **Hard caps.** At most 100 records and 64 KB whatever the config says, 20 records and
+  `FLARE_BREADCRUMBS_MAX_BYTES` (16 KB) by default; a limit of 0 or `FLARE_BREADCRUMBS=false`
+  switches them off. The oldest go first.
+* **First to go when a payload is too big**, before source context. The payload is flagged
+  `truncated`, as it is for any other detail given up.
+* **flare's own log lines are never breadcrumbs**, and neither is anything logged while a payload
+  is being built.
+* Not attached to fatal errors, which are built by hand with as little allocation as possible.
+* The channel is the app's default log channel: Laravel's log event does not say which channel
+  wrote the record.
+
 ### Fatal errors
 
 The exception handler sees everything that is thrown. It never sees the process being killed:
@@ -310,7 +341,7 @@ php artisan vendor:publish --tag=flare-client-config
 |-------|---------|--------------|
 | `FLARE_TIMEOUT` | 1.5s | The request is abandoned and the event is spooled. This runs inline in the request that threw, so the cost of flare being slow is paid by a user waiting for an error page. |
 | `FLARE_CIRCUIT_FAILURES` | 3 | The circuit opens for `FLARE_CIRCUIT_COOLDOWN` (60s) and events go straight to the spool without attempting HTTP. Without this, flare being down during its own deploy would add the full timeout to every request in every app at once. |
-| `FLARE_MAX_PAYLOAD_BYTES` | 256 KB | Detail is given up until the payload fits: source context first, then request input, then frames. The payload is flagged `truncated`. Enough frames always survive for flare to group the event correctly. |
+| `FLARE_MAX_PAYLOAD_BYTES` | 256 KB | Detail is given up until the payload fits: breadcrumbs first, then source context, then request input, then frames. The payload is flagged `truncated`. Enough frames always survive for flare to group the event correctly. |
 | `FLARE_SPOOL_MAX_FILE` | 5 MB | A new spool file is started. |
 | `FLARE_SPOOL_MAX_TOTAL` | 20 MB | **The oldest spool file is deleted.** In a storm the newest events describe what is happening now, and a spool that filled the droplet would take down every app on it. |
 | `flare:flush --batches` | 10 | The run stops and the rest of the spool goes on the next one. The flush runs in the foreground of `schedule:run`, so this is what keeps a full spool from holding up the app's other scheduled tasks for minutes. |
