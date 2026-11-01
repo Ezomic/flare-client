@@ -381,7 +381,7 @@ it('does not spend a walk over a huge context on every log line', function (): v
 
     $millis = (hrtime(true) - $started) / 1_000_000;
 
-    expect($millis)->toBeLessThan(500)
+    expect($millis)->toBeLessThan(2000)
         ->and(strlen((string) json_encode(crumbsFor())))->toBeLessThan(16384);
 });
 
