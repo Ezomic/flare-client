@@ -9,6 +9,7 @@ use Illuminate\Routing\Route;
 use Illuminate\Support\Facades\App;
 use Illuminate\Support\Facades\Storage;
 use Illuminate\Support\Str;
+use Thijssensoftware\FlareClient\Breadcrumbs\Breadcrumbs;
 use Thijssensoftware\FlareClient\Enums\Source;
 use Thijssensoftware\FlareClient\ProvidesFingerprint;
 use Thijssensoftware\FlareClient\Reporter;
@@ -25,6 +26,7 @@ class PayloadBuilder
     public function __construct(
         private readonly Sanitiser $sanitiser,
         private readonly SizeGuard $guard,
+        private readonly Breadcrumbs $breadcrumbs,
     ) {}
 
     /**
@@ -33,7 +35,12 @@ class PayloadBuilder
      */
     public function build(Throwable $e, Source $source, array $origin = [], string $level = 'error'): array
     {
-        return $this->guard->fit(array_filter([
+        $breadcrumbs = $this->breadcrumbs->all();
+
+        // Building a payload runs app code (the user, a fingerprint) and the
+        // size guard's own debug line. None of it is something the app was
+        // doing before the failure.
+        return $this->breadcrumbs->muted(fn (): array => $this->guard->fit(array_filter([
             'event_id' => (string) Str::uuid(),
             'occurred_at' => now()->toIso8601String(),
             'kind' => 'php',
@@ -50,7 +57,8 @@ class PayloadBuilder
             'user' => $this->user(),
             'context' => $this->context(),
             'origin' => $origin === [] ? null : $this->sanitiser->scrubArray($origin),
-        ], fn (mixed $value): bool => $value !== null));
+            'breadcrumbs' => $breadcrumbs === [] ? null : $breadcrumbs,
+        ], fn (mixed $value): bool => $value !== null)));
     }
 
     /**

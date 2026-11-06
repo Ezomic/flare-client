@@ -4,6 +4,7 @@ declare(strict_types=1);
 
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
+use Thijssensoftware\FlareClient\Breadcrumbs\Breadcrumbs;
 use Thijssensoftware\FlareClient\Enums\Source;
 use Thijssensoftware\FlareClient\LoggedMessage;
 use Thijssensoftware\FlareClient\Payload\PayloadBuilder;
@@ -94,11 +95,11 @@ it('does not report its own failure to report', function (): void {
     $builds = 0;
 
     $this->app->bind(PayloadBuilder::class, function () use (&$builds): PayloadBuilder {
-        return new class($builds, app(Sanitiser::class), app(SizeGuard::class)) extends PayloadBuilder
+        return new class($builds, app(Sanitiser::class), app(SizeGuard::class), app(Breadcrumbs::class)) extends PayloadBuilder
         {
-            public function __construct(private int &$builds, Sanitiser $sanitiser, SizeGuard $guard)
+            public function __construct(private int &$builds, Sanitiser $sanitiser, SizeGuard $guard, Breadcrumbs $breadcrumbs)
             {
-                parent::__construct($sanitiser, $guard);
+                parent::__construct($sanitiser, $guard, $breadcrumbs);
             }
 
             public function build(Throwable $e, Source $source, array $origin = [], string $level = 'error'): array

@@ -3,6 +3,7 @@
 declare(strict_types=1);
 
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Route;
 use Thijssensoftware\FlareClient\Enums\Source;
 use Thijssensoftware\FlareClient\Payload\PayloadBuilder;
@@ -134,4 +135,71 @@ it('leaves a payload it cannot measure alone', function (): void {
     // must not be mangled on the way out.
     expect($guard->fit(['exception' => ['message' => "\xB1\x31"]]))
         ->toBe(['exception' => ['message' => "\xB1\x31"]]);
+});
+
+it('drops breadcrumbs before anything else', function (): void {
+    foreach (range(1, 20) as $i) {
+        Log::info('breadcrumb '.$i.' '.str_repeat('x', 200));
+    }
+
+    $full = app(PayloadBuilder::class)->build(thrownDeep(20), Source::Console);
+
+    $withoutCrumbs = $full;
+    unset($withoutCrumbs['breadcrumbs']);
+
+    // Room for everything except the breadcrumbs: only they have to go.
+    config()->set('flare-client.max_payload_bytes', payloadBytes($withoutCrumbs) + 300);
+
+    $trimmed = app(PayloadBuilder::class)->build(thrownDeep(20), Source::Console);
+
+    $contexts = array_filter(array_map(
+        fn (array $frame): mixed => $frame['context'] ?? null,
+        $trimmed['exception']['frames'],
+    ));
+
+    expect($full)->toHaveKey('breadcrumbs')
+        ->and($trimmed)->not->toHaveKey('breadcrumbs')
+        ->and($trimmed['truncated'])->toBeTrue()
+        ->and($contexts)->not->toBeEmpty()
+        ->and(count($trimmed['exception']['frames']))->toBe(count($full['exception']['frames']));
+});
+
+it('drops source context next, and still keeps request input then', function (): void {
+    Route::post('/orders', fn () => abort(500))->middleware('web');
+
+    $this->app['request'] = Request::create('/orders', 'POST', ['notes' => str_repeat('n', 4000)], server: ['REQUEST_METHOD' => 'POST']);
+
+    Log::info('a breadcrumb '.str_repeat('x', 200));
+
+    $full = app(PayloadBuilder::class)->build(thrownDeep(20), Source::Http);
+
+    $noCrumbs = $full;
+    unset($noCrumbs['breadcrumbs']);
+
+    $noContext = $noCrumbs;
+    $noContext['exception']['frames'] = array_map(function (array $frame): array {
+        unset($frame['context']);
+
+        return $frame;
+    }, $noContext['exception']['frames']);
+
+    // Fits only once breadcrumbs AND source context are gone.
+    config()->set('flare-client.max_payload_bytes', payloadBytes($noContext) + 300);
+
+    $trimmed = app(PayloadBuilder::class)->build(thrownDeep(20), Source::Http);
+
+    $contexts = array_filter(array_map(fn (array $frame): mixed => $frame['context'] ?? null, $trimmed['exception']['frames']));
+
+    expect($trimmed)->not->toHaveKey('breadcrumbs')
+        ->and($contexts)->toBeEmpty()
+        ->and($trimmed['request']['input'])->toBe($full['request']['input']);
+});
+
+it('leaves the breadcrumbs alone when the payload fits', function (): void {
+    Log::info('kept');
+
+    $payload = app(PayloadBuilder::class)->build(thrownDeep(2), Source::Console);
+
+    expect($payload['breadcrumbs'])->toHaveCount(1)
+        ->and($payload)->not->toHaveKey('truncated');
 });

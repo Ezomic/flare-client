@@ -31,6 +31,20 @@ class Sanitiser
         '/\b(?:sk|pk|rk)_(?:live|test)_[A-Za-z0-9]{10,}/', // provider keys
     ];
 
+    private const PERSONAL_KEY = '/(e-?mail|phone|mobile|telephone|(?:^|[_-])tel$|first.?name|last.?name|full.?name|sur.?name|user.?name|^name$|address|birth|postcode|postal)/i';
+
+    private const QUERY_KEY = '/^(?:code|auth.?code|verification.?code)$/i';
+
+    private const EMAIL = '/[A-Za-z0-9._%+\-]+@[A-Za-z0-9\-]+(?:\.[A-Za-z0-9\-]+)+/';
+
+    private const BEARER = '/\bBearer\s+[A-Za-z0-9\-._~+\/]+=*/i';
+
+    private const ASSIGNED_SECRET = '/\b((?:access[_-]?|refresh[_-]?|api[_-]?|auth[_-]?|id[_-]?)?(?:token|code|secret|password|passwd|pwd|key|signature))(["\']?\s*[=:]\s*["\']?)[^\s&;,"\')]+/i';
+
+    private const PATH_CUE = '/^(?:reset|reset-password|password|verify|verify-email|confirm|activate|invite|invitation|accept|unsubscribe|magic|login-link|signed|token|tokens)$/i';
+
+    private const OPAQUE_SEGMENT = '/^(?=.*\d)(?=.*[A-Za-z])[A-Za-z0-9]{20,}$|^(?=.*\d)(?=.*[A-Z])(?=.*[a-z])[A-Za-z0-9_-]{32,}$/';
+
     /**
      * Keys are normalised to strings on the way out, so anything array-shaped
      * can come in: request input, a decoded body, a log record's context.
@@ -118,31 +132,139 @@ class Sanitiser
     }
 
     /**
-     * Query strings get the same treatment as body input.
-     *
-     * Easy to forget, and password reset links put the token right there in
-     * ?token=, which would otherwise be captured verbatim on every 500 that
-     * happens to occur on a reset page.
+     * A page or request url carries secrets the key-name rules cannot see: an
+     * address in ?email=, a one-time ?code=, a reset token as a path segment.
+     * The query gets the array rules plus the personal-key rules, and the path
+     * loses anything that follows a token cue or looks like an opaque id.
      */
     public function scrubUrl(string $url): string
     {
         $parts = parse_url($url);
 
-        if ($parts === false || ! isset($parts['query'])) {
-            return mb_substr($url, 0, $this->maxStringLength());
+        if ($parts === false) {
+            return $this->scrubMessage($url);
         }
 
-        parse_str($parts['query'], $query);
+        $rebuilt = isset($parts['host'])
+            ? ($parts['scheme'] ?? 'http').'://'.$parts['host'].(isset($parts['port']) ? ':'.$parts['port'] : '')
+            : '';
 
-        $scrubbed = $this->scrubArray($query);
+        $rebuilt .= $this->scrubPath($parts['path'] ?? '');
 
-        $rebuilt = ($parts['scheme'] ?? 'http').'://'
-            .($parts['host'] ?? '')
-            .(isset($parts['port']) ? ':'.$parts['port'] : '')
-            .($parts['path'] ?? '')
-            .'?'.http_build_query($scrubbed);
+        if (isset($parts['query'])) {
+            parse_str($parts['query'], $query);
+
+            $rebuilt .= '?'.http_build_query($this->scrubQuery($query));
+        }
 
         return mb_substr($rebuilt, 0, $this->maxStringLength());
+    }
+
+    /**
+     * Free text, such as an exception message, where a secret is written as
+     * "token=abc", a Bearer header or an address rather than stored under a key.
+     */
+    public function scrubMessage(string $value): string
+    {
+        return $this->scrubInline($this->scrubString($value));
+    }
+
+    /**
+     * Display data, such as page props, where a person's details sit under
+     * keys like "name" or "phone_number" that the credential rules ignore.
+     *
+     * @param  array<array-key, mixed>  $props
+     * @return array<string, mixed>
+     */
+    public function scrubProps(array $props): array
+    {
+        return $this->scrubPersonal($this->scrubArray($props));
+    }
+
+    private function scrubPath(string $path): string
+    {
+        $segments = explode('/', $path);
+        $afterCue = false;
+
+        foreach ($segments as $index => $segment) {
+            $plain = rawurldecode($segment);
+
+            if ($plain !== '' && ($afterCue || $this->isOpaque($plain) || preg_match(self::EMAIL, $plain) === 1)) {
+                $segments[$index] = self::REDACTED;
+            }
+
+            $afterCue = preg_match(self::PATH_CUE, $plain) === 1;
+        }
+
+        return implode('/', $segments);
+    }
+
+    /**
+     * @param  array<array-key, mixed>  $query
+     * @return array<string, mixed>
+     */
+    private function scrubQuery(array $query): array
+    {
+        $clean = $this->scrubArray($query);
+
+        foreach ($clean as $key => $value) {
+            if (preg_match(self::QUERY_KEY, (string) $key) === 1) {
+                $clean[$key] = self::REDACTED;
+            }
+        }
+
+        return $this->scrubPersonal($clean);
+    }
+
+    /**
+     * @param  array<string, mixed>  $values
+     * @return array<string, mixed>
+     */
+    private function scrubPersonal(array $values): array
+    {
+        foreach ($values as $key => $value) {
+            if (preg_match(self::PERSONAL_KEY, (string) $key) === 1) {
+                $values[$key] = self::REDACTED;
+
+                continue;
+            }
+
+            if (is_array($value)) {
+                $values[$key] = $this->scrubPersonal($this->stringKeys($value));
+            } elseif (is_string($value)) {
+                $values[$key] = $this->isOpaque($value) ? self::REDACTED : $this->scrubInline($value);
+            }
+        }
+
+        return $values;
+    }
+
+    /**
+     * @param  array<array-key, mixed>  $value
+     * @return array<string, mixed>
+     */
+    private function stringKeys(array $value): array
+    {
+        $keyed = [];
+
+        foreach ($value as $key => $item) {
+            $keyed[(string) $key] = $item;
+        }
+
+        return $keyed;
+    }
+
+    private function scrubInline(string $value): string
+    {
+        $clean = preg_replace(self::BEARER, 'Bearer '.self::REDACTED, $value) ?? $value;
+        $clean = preg_replace(self::ASSIGNED_SECRET, '$1$2'.self::REDACTED, $clean) ?? $clean;
+
+        return preg_replace(self::EMAIL, self::REDACTED, $clean) ?? $clean;
+    }
+
+    private function isOpaque(string $segment): bool
+    {
+        return preg_match(self::OPAQUE_SEGMENT, $segment) === 1;
     }
 
     private function isSensitiveKey(string $key): bool

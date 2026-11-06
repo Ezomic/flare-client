@@ -15,10 +15,11 @@ use Illuminate\Support\Facades\Log;
  * likely to be too big are wrapped exception chains with deep stacks, which
  * are exactly the ones worth reading.
  *
- * Detail is given up in the order a human misses it least, and the fingerprint
- * is protected throughout: the chain is never dropped, because flare groups on
- * the root cause, and enough frames are always kept for its signature to
- * survive. A payload that lost something says so.
+ * Detail is given up in the order a human misses it least: breadcrumbs first,
+ * because they are context about the failure rather than the failure. The
+ * fingerprint is protected throughout: the chain is never dropped, because
+ * flare groups on the root cause, and enough frames are always kept for its
+ * signature to survive. A payload that lost something says so.
  */
 class SizeGuard
 {
@@ -45,7 +46,11 @@ class SizeGuard
             return $payload;
         }
 
-        $payload = $this->stripContext($payload);
+        unset($payload['breadcrumbs']);
+
+        if ($this->size($payload) > $max) {
+            $payload = $this->stripContext($payload);
+        }
 
         if ($this->size($payload) > $max) {
             $payload = $this->dropInput($payload);
@@ -67,8 +72,8 @@ class SizeGuard
     }
 
     /**
-     * Source context is the first to go: it is the fattest thing in the
-     * payload and the only part a stack trace is still readable without.
+     * Source context goes after the breadcrumbs: it is the fattest thing in
+     * the payload and the only part a stack trace is still readable without.
      *
      * @param  array<string, mixed>  $payload
      * @return array<string, mixed>

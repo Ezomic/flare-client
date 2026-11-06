@@ -16,6 +16,7 @@ use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 use Illuminate\Support\Facades\Route;
 use Illuminate\Support\Facades\Storage;
+use Thijssensoftware\FlareClient\Breadcrumbs\Breadcrumbs;
 use Thijssensoftware\FlareClient\Enums\Source;
 use Thijssensoftware\FlareClient\FlareClientServiceProvider;
 use Thijssensoftware\FlareClient\Payload\PayloadBuilder;
@@ -337,7 +338,7 @@ it('captures no source context when the frame points at a file that is gone', fu
 it('gives up quietly when even logging its own failure fails', function (): void {
     Log::shouldReceive('debug')->andThrow(new RuntimeException('the log is broken too'));
 
-    $this->app->bind(PayloadBuilder::class, fn (): PayloadBuilder => new class(app(Sanitiser::class), app(SizeGuard::class)) extends PayloadBuilder
+    $this->app->bind(PayloadBuilder::class, fn (): PayloadBuilder => new class(app(Sanitiser::class), app(SizeGuard::class), app(Breadcrumbs::class)) extends PayloadBuilder
     {
         public function build(Throwable $e, Source $source, array $origin = [], string $level = 'error'): array
         {
@@ -367,7 +368,7 @@ it('boots without a scheduler at all', function (): void {
 it('swallows its own failure to report instead of propagating it', function (): void {
     // The payload builder throwing is the realistic version of this: a config
     // value of the wrong shape reaches deep enough to break the build.
-    $this->app->bind(PayloadBuilder::class, fn (): PayloadBuilder => new class(app(Sanitiser::class), app(SizeGuard::class)) extends PayloadBuilder
+    $this->app->bind(PayloadBuilder::class, fn (): PayloadBuilder => new class(app(Sanitiser::class), app(SizeGuard::class), app(Breadcrumbs::class)) extends PayloadBuilder
     {
         public function build(Throwable $e, Source $source, array $origin = [], string $level = 'error'): array
         {

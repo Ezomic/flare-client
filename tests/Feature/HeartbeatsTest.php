@@ -39,6 +39,40 @@ function finish(Event $task, int $exitCode = 0): void
     event(new ScheduledTaskFinished($task, 0.1));
 }
 
+/**
+ * schedule:run drops a task whose mutex is held before it runs it, so
+ * the skip that reaches ScheduledTaskFinished is the race: another
+ * process takes the mutex after that check, which is where the starting
+ * event is dispatched.
+ */
+function racing(stdClass $other, string $name = 'stuck', bool $succeeds = true): Event
+{
+    $task = schedule()->call(fn () => $succeeds)->name($name)->everyMinute()->withoutOverlapping();
+
+    Illuminate\Support\Facades\Event::listen(function (ScheduledTaskStarting $event) use ($task, $other): void {
+        if ($other->holds && $event->task === $task) {
+            $task->mutex->create($task);
+        }
+    });
+
+    return $task;
+}
+
+/**
+ * Heartbeats as they run on Laravel 11 and 12, where nothing on the task says a
+ * run was skipped, so that the same paths are exercised on 13.
+ */
+function withoutSkipFlag(): void
+{
+    app()->singleton(Heartbeats::class, fn () => new class(app(Transport::class), app(Schedule::class)) extends Heartbeats
+    {
+        protected function reportsSkips(): bool
+        {
+            return false;
+        }
+    });
+}
+
 function heartbeatSpool(): Spool
 {
     return new Spool('local', 'flare-heartbeats');
@@ -119,24 +153,62 @@ describe('recording', function (): void {
         expect(array_column(spooledBeats(), 'outcome'))->toBe(['failure', 'failure']);
     });
 
-    it('does not ping for a run skipped because the last one still holds its mutex', function (): void {
-        $task = schedule()->command('stuck')->everyMinute()->withoutOverlapping();
-        $task->skippedBecauseOverlapping = true;
+    foreach ([true, false] as $flagged) {
+        describe('a run skipped because the last one still holds its mutex'.($flagged ? ' (as this Laravel reports it)' : ' (without a flag on the task)'), function () use ($flagged): void {
+            beforeEach(function () use ($flagged): void {
+                if (! $flagged) {
+                    withoutSkipFlag();
+                }
+            });
 
-        finish($task);
+            it('does not ping for it', function (): void {
+                $other = (object) ['holds' => true];
+                $task = racing($other);
 
-        $heartbeats = app(Heartbeats::class);
-        $heartbeats->record($task, true);
-        $heartbeats->record($task, true, background: true);
+                $this->artisan('schedule:run');
 
-        expect(spooledBeats())->toBe([]);
+                expect(spooledBeats())->toBe([]);
 
-        $task->skippedBecauseOverlapping = false;
-        event(new ScheduledTaskStarting($task));
-        finish($task);
+                $other->holds = false;
+                $task->mutex->forget($task);
+                $this->artisan('schedule:run');
 
-        expect(spooledBeats())->toHaveCount(1);
-    });
+                expect(array_column(spooledBeats(), 'outcome'))->toBe(['success']);
+            });
+
+            it('does not turn a skip after a failed run into a failure', function (): void {
+                $other = (object) ['holds' => false];
+                $task = racing($other, succeeds: false);
+
+                $this->artisan('schedule:run');
+
+                expect(array_column(spooledBeats(), 'outcome'))->toBe(['failure']);
+
+                $other->holds = true;
+                $this->artisan('schedule:run');
+
+                expect(spooledBeats())->toHaveCount(1);
+            });
+
+            it('still records a run of a task that can overlap and failed before it ran', function (): void {
+                $task = racing((object) ['holds' => false], 'flaky');
+                $task->before(fn () => throw new RuntimeException('before hook failed'));
+
+                $this->artisan('schedule:run');
+
+                expect(array_column(spooledBeats(), 'outcome'))->toBe(['failure']);
+            });
+
+            it('leaves the exit code of a task that cannot overlap alone', function (): void {
+                $task = schedule()->call(fn () => true)->name('plain')->everyMinute();
+                $task->exitCode = 3;
+
+                event(new ScheduledTaskStarting($task));
+
+                expect($task->exitCode)->toBe(3);
+            });
+        });
+    }
 
     it('waits for a background task to really finish', function (): void {
         $task = schedule()->command('slow:job')->runInBackground();
