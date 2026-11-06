@@ -22,6 +22,7 @@ use RuntimeException;
 use Thijssensoftware\FlareClient\Breadcrumbs\Breadcrumbs;
 use Thijssensoftware\FlareClient\Console\DoctorCommand;
 use Thijssensoftware\FlareClient\Console\FlushCommand;
+use Thijssensoftware\FlareClient\Console\SourcemapsCommand;
 use Thijssensoftware\FlareClient\Console\TestCommand;
 use Thijssensoftware\FlareClient\Enums\Source;
 use Thijssensoftware\FlareClient\Fatal\FatalReporter;
@@ -58,8 +59,12 @@ class FlareClientServiceProvider extends ServiceProvider
             __DIR__.'/../config/flare-client.php' => config_path('flare-client.php'),
         ], 'flare-client-config');
 
+        $this->publishes([
+            __DIR__.'/../resources/js/flare.js' => resource_path('js/vendor/flare.js'),
+        ], 'flare-client-browser');
+
         if ($this->app->runningInConsole()) {
-            $this->commands([DoctorCommand::class, FlushCommand::class, TestCommand::class]);
+            $this->commands([DoctorCommand::class, FlushCommand::class, SourcemapsCommand::class, TestCommand::class]);
         }
 
         $this->registerExceptionReporting();

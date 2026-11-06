@@ -335,6 +335,106 @@ Publish the config to change any of it:
 php artisan vendor:publish --tag=flare-client-config
 ```
 
+## Errors from the browser
+
+A second reporter, a script of about 2 KB minified (1.3 KB gzipped; your Vite build minifies the published file), sends the errors a visitor's browser
+hits to the same flare. It is a separate door from the server key: a script in a page is readable
+by every visitor, so it carries a **public key** that flare only honours from the origins you list.
+
+### Switch it on in flare
+
+```bash
+php artisan flare:browser billr --origin=https://billr.thijssensoftware.nl
+```
+
+It prints the public key (`flp_...`). Unlike the server key it is not a secret and can be shown
+again by running the command without options. `--origin` replaces the list and `--revoke` closes
+the door; opening it again mints a new key. Origins are exact:
+scheme, host and optional port, no wildcards and no paths.
+
+An origin list stops other *websites* from using the key through a visitor's browser. It cannot stop
+a script that sends the header by hand, which is why flare also limits each address and each project,
+caps the body, builds every event from a whitelist of fields and never lets this route set what a
+server report can.
+
+### Add it to the app
+
+```bash
+php artisan vendor:publish --tag=flare-client-browser   # resources/js/vendor/flare.js
+```
+
+```ts
+// resources/js/app.ts, before createInertiaApp
+import { router } from '@inertiajs/vue3';
+import flare from './vendor/flare';
+
+const reporter = flare({
+    url: import.meta.env.VITE_FLARE_URL + '/api/ingest/browser',
+    key: import.meta.env.VITE_FLARE_PUBLIC_KEY,
+    release: import.meta.env.VITE_RELEASE,
+    router,
+});
+
+// inside setup({ el, App, props, plugin }), after createApp(...)
+reporter.vue(app);
+```
+
+It hooks `window.onerror`, `window.onunhandledrejection`, Vue's `app.config.errorHandler` (the
+handler already there is called, or the error is logged as before) and the Inertia router. Inertia 3
+names its failure events `networkError` and `httpException`; the older `exception` and `invalid` are
+listened to as well. `reporter.report(error)` sends one by hand.
+
+Set `VITE_RELEASE` to the git sha of the build. flare only links an event to a release it already
+knows, which the deploy makes known by uploading the source maps (below). For the request id, render
+it into the layout:
+
+```blade
+<meta name="request-id" content="{{ app(\Thijssensoftware\RequestId\RequestIdContext::class)->current() }}">
+```
+
+### What it sends, and what it leaves out
+
+Message, error name, the stack text, the page url, the release, the request id, the Inertia
+component, the page props, the viewport. The browser and OS are the `User-Agent` header of the request, stored as sent and
+not parsed.
+
+* **Page props are filtered twice.** Keys that look like secrets (`pass`, `token`, `key`, `auth`,
+  `session` and so on) are dropped in the browser, and flare runs the same sanitiser over them that
+  it runs over PHP request input. Props are often display data full of exactly those fields.
+* **Noise is dropped before it is sent**: `ResizeObserver loop` errors, errors whose top frame is
+  in a `chrome-extension://`, `moz-extension://` or Safari extension, and the opaque cross-origin
+  `Script error.` that carries no stack. flare checks again.
+* **The same message and stack is sent once per minute per browser session**, and at most 20 errors
+  per page load.
+* **Delivery is `fetch` with `keepalive: true`**, so an error during a navigation still lands. The
+  body is plain text and there are no custom headers, so the browser never preflights it.
+* **Reporting never throws.** Every step of it is wrapped, and a failed request is swallowed.
+
+### Source maps
+
+Vite must build with `sourcemap: 'hidden'`, not `true`. Plain `true` writes a comment into every
+bundle that points browsers at the map, and the map holds the whole un-minified source of the app.
+
+```bash
+npm run build
+php artisan flare:sourcemaps
+```
+
+The command uploads every `.map` under `public/build` for the release in `release.sha`
+(`--release=` overrides, `--path=` changes the directory) and **deletes them from the build
+afterwards, also when the upload fails or the process dies on a fatal error**, so a deploy never
+leaves the source public. Symbolic links named `*.map` are deleted but never uploaded. `--keep` is
+for debugging. It fails, before sending anything, when there are no maps, a name appears twice, a map is empty or
+named in a way flare would refuse (letters, digits, `_`, `.` and `-` only), or the release is not a sha.
+
+flare keeps the maps of the newest releases only (`FLARE_RETENTION_SOURCEMAP_RELEASES`, 5) on a
+private disk, and nothing serves them back. Uploads are split into requests of at most
+`FLARE_SOURCEMAP_BATCH_BYTES` (16 MB) and `FLARE_SOURCEMAP_BATCH_FILES` (20, PHP's default
+`max_file_uploads`); the web server in front of flare has to accept that much, and the command
+fails if flare reports storing fewer maps than it was sent.
+Reading the maps to show the original source is a later step: until then these events are grouped
+by message, file, line and column, with the build's hash stripped from the file name.
+
 ## Limits, and what happens at them
 
 | Limit | Default | At the limit |
