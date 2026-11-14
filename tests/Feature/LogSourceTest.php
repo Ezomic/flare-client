@@ -31,6 +31,12 @@ it('reports a logged error that has no exception behind it', function (): void {
     });
 });
 
+it('scrubs a secret and an email written into the logged message', function (): void {
+    Log::error('Webhook rejected, token=whsec9f8e7d6c for jan@example.nl');
+
+    Http::assertSent(fn ($request): bool => $request->data()['exception']['message'] === 'Webhook rejected, token=[filtered] for [filtered]');
+});
+
 it('points the stack at the line that logged it', function (): void {
     Log::error('from this file');
 

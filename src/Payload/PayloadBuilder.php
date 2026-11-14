@@ -105,7 +105,7 @@ class PayloadBuilder
     {
         return [
             'class' => $e::class,
-            'message' => $this->sanitiser->scrubString($e->getMessage()),
+            'message' => $this->sanitiser->scrubMessage($e->getMessage()),
             'code' => $e->getCode(),
             'file' => $e->getFile(),
             'line' => $e->getLine(),

@@ -39,7 +39,9 @@ class Sanitiser
 
     private const BEARER = '/\bBearer\s+[A-Za-z0-9\-._~+\/]+=*/i';
 
-    private const ASSIGNED_SECRET = '/\b((?:access[_-]?|refresh[_-]?|api[_-]?|auth[_-]?|id[_-]?)?(?:token|code|secret|password|passwd|pwd|key|signature))(["\']?\s*[=:]\s*["\']?)[^\s&;,"\')]+/i';
+    // Not \b: there is no word boundary between "_" and a letter, so a prefixed
+    // name such as client_secret or DB_PASSWORD would slip through.
+    private const ASSIGNED_SECRET = '/(?<![A-Za-z0-9])((?:access[_-]?|refresh[_-]?|api[_-]?|auth[_-]?|id[_-]?)?(?:token|code|secret|password|passwd|pwd|key|signature))(["\']?\s*[=:]\s*["\']?)[^\s&;,"\')]+/i';
 
     private const PATH_CUE = '/^(?:reset|reset-password|password|verify|verify-email|confirm|activate|invite|invitation|accept|unsubscribe|magic|login-link|signed|token|tokens)$/i';
 

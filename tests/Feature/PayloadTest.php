@@ -136,6 +136,20 @@ it('scrubs a secret in the exception message itself', function (): void {
     expect($payload['exception']['message'])->toBe(Sanitiser::REDACTED);
 });
 
+it('scrubs inline secrets and emails in the message of every link in the chain', function (string $message, string $leaked): void {
+    $root = new RuntimeException($message);
+    $wrapper = new RuntimeException('Wrapped: '.$message, 0, $root);
+
+    $payload = app(PayloadBuilder::class)->build($wrapper, Source::Http);
+
+    expect($payload['exception']['message'])->not->toContain($leaked)->toContain(Sanitiser::REDACTED)
+        ->and($payload['previous'][0]['message'])->not->toContain($leaked)->toContain(Sanitiser::REDACTED);
+})->with([
+    'inline token' => ['Webhook rejected, token=whsec9f8e7d6c', 'whsec9f8e7d6c'],
+    'api key in a url' => ['Client error: `GET https://api.example.com/v1/rates?api_key=k3y123abc&base=EUR` resulted in a `401 Unauthorized` response', 'k3y123abc'],
+    'email' => ['insert into users (name, email) values (Jan, jan@example.nl)', 'jan@example.nl'],
+]);
+
 it('omits the request block when running in the console', function (): void {
     $payload = app(PayloadBuilder::class)->build(new RuntimeException('Boom'), Source::Console);
 
