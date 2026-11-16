@@ -214,7 +214,18 @@ describe('messages', function (): void {
         'json style' => ['{"password": "hunter2"}', 'hunter2'],
         'bearer' => ['401 with header Bearer abc.def-ghi', 'abc.def-ghi'],
         'email' => ['No account for jan@example.nl', 'jan@example.nl'],
+        'client secret' => ['token request failed: client_secret=s3cr3tvalue', 's3cr3tvalue'],
+        'db password' => ['DB_PASSWORD=hunter2 in .env', 'hunter2'],
+        'prefixed api key' => ['x_api_key=abc123xyz', 'abc123xyz'],
+        'aws secret' => ['AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI', 'wJalrXUtnFEMI'],
+        'json client secret' => ['{"client_secret":"abc987"}', 'abc987'],
     ]);
+
+    it('filters env style names wherever they sit in the text', function (): void {
+        $text = $this->sanitiser->scrubMessage('DB_PASSWORD=x client_secret=y STRIPE_SECRET_KEY = z');
+
+        expect($text)->not->toContain('=x')->not->toContain('=y')->not->toContain('= z');
+    });
 
     it('leaves an ordinary message alone', function (): void {
         $message = "Cannot read properties of undefined (reading 'id')";
