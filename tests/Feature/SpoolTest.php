@@ -399,3 +399,120 @@ it('keeps the events past the batch cap when flare stops part way', function ():
         ['event_id' => 'event-5'],
     ]);
 });
+
+/**
+ * An ordinary spooled exception: about 15 KB once its frames carry source
+ * context, which is what the size guard lets through every day.
+ *
+ * @return array<string, mixed>
+ */
+function realisticEvent(string $id): array
+{
+    $frames = array_map(fn (int $i): array => [
+        'file' => '/var/www/app/vendor/laravel/framework/src/Illuminate/Pipeline/Pipeline'.$i.'.php',
+        'line' => 100 + $i,
+        'class' => 'Illuminate\\Pipeline\\Pipeline',
+        'function' => 'handle',
+        'context' => array_fill(0, 7, '        return $this->container->make($pipe)->handle($passable, $stack);'),
+    ], range(1, 26));
+
+    return [
+        'event_id' => $id,
+        'exception' => ['class' => 'RuntimeException', 'message' => 'Checkout failed', 'frames' => $frames],
+    ];
+}
+
+/**
+ * Answers like flare's batch route: 413 over 256 KiB, otherwise all taken.
+ *
+ * @param  array<int, int>  $bodies  sizes of the bodies that were posted
+ */
+function fakeFlareWithBodyLimit(array &$bodies): void
+{
+    Http::fake(function ($request) use (&$bodies) {
+        $bodies[] = strlen($request->body());
+
+        if (strlen($request->body()) > 262144) {
+            return Http::response(['message' => 'Payload too large.', 'max_bytes' => 262144], 413);
+        }
+
+        return Http::response(['accepted' => count($request->data()['events'])], 202);
+    });
+}
+
+it('delivers a backlog of realistically sized events in batches under the body limit', function (): void {
+    $spool = app(Spool::class);
+
+    foreach (range(1, 40) as $i) {
+        $spool->push(realisticEvent('event-'.$i));
+    }
+
+    expect(strlen((string) json_encode(realisticEvent('event-1'))))->toBeGreaterThan(14_000);
+
+    $bodies = [];
+    fakeFlareWithBodyLimit($bodies);
+
+    $this->artisan('flare:flush')->expectsOutputToContain('Flushed 40 event(s).')->assertOk();
+
+    expect($spool->files())->toBeEmpty()
+        ->and(count($bodies))->toBeGreaterThan(1)
+        ->and(max($bodies))->toBeLessThanOrEqual(200_100);
+});
+
+it('sends an event bigger than the batch budget on its own', function (): void {
+    $spool = app(Spool::class);
+    $spool->push(['event_id' => 'small-1']);
+    $spool->push(['event_id' => 'big', 'message' => str_repeat('x', 210_000)]);
+    $spool->push(['event_id' => 'small-2']);
+
+    $posted = [];
+
+    Http::fake(function ($request) use (&$posted) {
+        $posted[] = array_column($request->data()['events'], 'event_id');
+
+        return Http::response(['accepted' => count($request->data()['events'])], 202);
+    });
+
+    $this->artisan('flare:flush')->assertOk();
+
+    expect($posted)->toBe([['small-1'], ['big'], ['small-2']])
+        ->and($spool->files())->toBeEmpty();
+});
+
+it('drops a single event flare refuses as too large and delivers the rest', function (): void {
+    $spool = app(Spool::class);
+    $spool->push(['event_id' => 'huge', 'message' => str_repeat('x', 270_000)]);
+    $spool->push(['event_id' => 'after']);
+
+    $bodies = [];
+    fakeFlareWithBodyLimit($bodies);
+
+    $this->artisan('flare:flush')->expectsOutputToContain('Flushed 1 event(s).')->assertOk();
+
+    expect($bodies)->toHaveCount(2)
+        ->and($spool->files())->toBeEmpty();
+});
+
+it('keeps the events of a larger batch flare refuses as too large', function (): void {
+    $spool = app(Spool::class);
+    $spool->push(['event_id' => 'one']);
+    $spool->push(['event_id' => 'two']);
+
+    Http::fake(['*' => Http::response(['message' => 'Payload too large.'], 413)]);
+
+    $this->artisan('flare:flush')->assertOk();
+
+    expect($spool->read($spool->files()[0]))->toBe([['event_id' => 'one'], ['event_id' => 'two']]);
+});
+
+it('drops a single-event batch on a 413 without counting a failure', function (): void {
+    config()->set('flare-client.circuit.failures', 1);
+
+    Http::fake(['*' => Http::response(['message' => 'Payload too large.'], 413)]);
+
+    $result = app(Transport::class)->sendBatch([['event_id' => 'one']]);
+
+    expect($result->delivery)->toBe(Delivery::Dropped)
+        ->and($result->accepted)->toBe(0)
+        ->and(app(CircuitBreaker::class)->isOpen())->toBeFalse();
+});

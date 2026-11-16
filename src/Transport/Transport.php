@@ -87,6 +87,12 @@ class Transport
             return new BatchResult(Delivery::Throttled, 0);
         }
 
+        // One event over the limit will be over it on every replay. On a larger
+        // batch the 413 means the batch budget was wrong, so the events stay.
+        if ($response->status() === 413 && count($events) === 1) {
+            return new BatchResult(Delivery::Dropped, 0);
+        }
+
         if ($response->successful()) {
             $this->circuit->recordSuccess();
 

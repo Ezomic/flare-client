@@ -6,6 +6,7 @@ namespace Thijssensoftware\FlareClient\Console;
 
 use Illuminate\Console\Command;
 use Thijssensoftware\FlareClient\Heartbeat\Heartbeats;
+use Thijssensoftware\FlareClient\Transport\Delivery;
 use Thijssensoftware\FlareClient\Transport\Spool;
 use Thijssensoftware\FlareClient\Transport\Transport;
 use Throwable;
@@ -28,6 +29,11 @@ use Throwable;
  */
 class FlushCommand extends Command
 {
+    /**
+     * Well under flare's 256 KiB body limit, as the ingest contract asks.
+     */
+    private const BATCH_BYTES = 200_000;
+
     protected $signature = 'flare:flush
         {--limit=10 : Maximum spool files to drain in one run}
         {--batches=10 : Maximum batch requests to send in one run}';
@@ -61,7 +67,6 @@ class FlushCommand extends Command
 
         $limit = (int) $this->option('limit');
         $batchesLeft = max((int) $this->option('batches'), 1);
-        $size = $this->batchSize();
         $sent = 0;
 
         foreach (array_slice($files, 0, max($limit, 1)) as $file) {
@@ -80,9 +85,10 @@ class FlushCommand extends Command
                 continue;
             }
 
-            $sending = array_slice($events, 0, $batchesLeft * $size);
-            $deferred = array_slice($events, count($sending));
-            $batchesLeft -= (int) ceil(count($sending) / $size);
+            $chunks = $this->chunks($events);
+            $sending = array_slice($chunks, 0, $batchesLeft);
+            $deferred = array_merge(...array_slice($chunks, count($sending)));
+            $batchesLeft -= count($sending);
 
             $remaining = $this->drain($transport, $sending, $sent);
 
@@ -105,15 +111,19 @@ class FlushCommand extends Command
     }
 
     /**
-     * @param  array<int, array<string, mixed>>  $events
+     * @param  array<int, array<int, array<string, mixed>>>  $chunks
      * @return array<int, array<string, mixed>> the events still undelivered
      */
-    private function drain(Transport $transport, array $events, int &$sent): array
+    private function drain(Transport $transport, array $chunks, int &$sent): array
     {
-        $size = $this->batchSize();
-
-        foreach (array_chunk($events, $size) as $index => $chunk) {
+        foreach (array_values($chunks) as $index => $chunk) {
             $result = $transport->sendBatch($chunk);
+
+            // A single event flare refuses as too large stays too large, and
+            // keeping it would block everything spooled behind it.
+            if ($result->delivery === Delivery::Dropped) {
+                continue;
+            }
 
             $sent += $result->accepted;
 
@@ -122,11 +132,49 @@ class FlushCommand extends Command
             // "sent" verdict did, silently threw away everything past the
             // event flare stopped at.
             if ($result->accepted < count($chunk)) {
-                return array_slice($events, $index * $size + $result->accepted);
+                return [
+                    ...array_slice($chunk, $result->accepted),
+                    ...array_merge(...array_slice($chunks, $index + 1)),
+                ];
             }
         }
 
         return [];
+    }
+
+    /**
+     * Splits events into batches by count and by encoded size.
+     *
+     * flare refuses a batch body over 256 KiB with a 413, and one event may be
+     * close to that on its own, so a count alone sends batches that can never
+     * land. Every batch holds at least one event.
+     *
+     * @param  array<int, array<string, mixed>>  $events
+     * @return array<int, array<int, array<string, mixed>>>
+     */
+    private function chunks(array $events): array
+    {
+        $size = $this->batchSize();
+        $chunks = [];
+        $chunk = [];
+        $bytes = 0;
+
+        foreach ($events as $event) {
+            $eventBytes = strlen((string) json_encode($event)) + 1;
+
+            if ($chunk !== [] && (count($chunk) >= $size || $bytes + $eventBytes > self::BATCH_BYTES)) {
+                $chunks[] = $chunk;
+                $chunk = [];
+                $bytes = 0;
+            }
+
+            $chunk[] = $event;
+            $bytes += $eventBytes;
+        }
+
+        $chunks[] = $chunk;
+
+        return $chunks;
     }
 
     /**
